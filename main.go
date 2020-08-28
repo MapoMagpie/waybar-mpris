@@ -418,21 +418,27 @@ func main() {
 				}
 				command := string(buf[0:nr])
 				if command == "player-next" {
-					if players.current < uint(len(players.list)-1) {
-						players.current += 1
-					} else {
-						players.current = 0
+					length := len(players.list)
+					if length != 1 {
+						if players.current < uint(length-1) {
+							players.current += 1
+						} else {
+							players.current = 0
+						}
+						players.Refresh()
+						fmt.Println(players.JSON())
 					}
-					players.Refresh()
-					fmt.Println(players.JSON())
 				} else if command == "player-prev" {
-					if players.current != 0 {
-						players.current -= 1
-					} else {
-						players.current = uint(len(players.list) - 1)
+					length := len(players.list)
+					if length != 1 {
+						if players.current != 0 {
+							players.current -= 1
+						} else {
+							players.current = uint(length - 1)
+						}
+						players.Refresh()
+						fmt.Println(players.JSON())
 					}
-					players.Refresh()
-					fmt.Println(players.JSON())
 				} else if command == "next" {
 					players.Next()
 				} else if command == "prev" {
