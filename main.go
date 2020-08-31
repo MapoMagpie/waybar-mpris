@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"log"
 	"net"
@@ -44,6 +45,7 @@ const (
 	// PropertiesChanged
 	MATCH_PC = "type='signal',path='/org/mpris/MediaPlayer2',interface='org.freedesktop.DBus.Properties'"
 	SOCK     = "/tmp/waybar-mpris.sock"
+	LOGFILE  = "/tmp/waybar-mpris.log"
 )
 
 var (
@@ -352,6 +354,13 @@ func (pl *PlayerList) Toggle() {
 }
 
 func main() {
+	logfile, err := os.OpenFile(LOGFILE, os.O_CREATE|os.O_APPEND|os.O_RDWR, 0666)
+	if err != nil {
+		log.Fatalf("Couldn't open %s for writing: %s", LOGFILE, err)
+	}
+	mw := io.MultiWriter(logfile, os.Stdout)
+	log.SetOutput(mw)
+	os.Stderr = logfile
 	flag.StringVar(&PLAY, "play", PLAY, "Play symbol/text to use.")
 	flag.StringVar(&PAUSE, "pause", PAUSE, "Pause symbol/text to use.")
 	flag.StringVar(&SEP, "separator", SEP, "Separator string to use between artist, album, and title.")
