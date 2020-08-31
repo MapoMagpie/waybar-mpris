@@ -64,19 +64,19 @@ func NewPlayer(conn *dbus.Conn, name string) (p *Player) {
 	for key, val := range knownPlayers {
 		if strings.Contains(name, key) {
 			playerName = val
-			if val == "Browser" {
-				file, err := ioutil.ReadFile(fmt.Sprintf("/proc/%d/cmdline", pid))
-				if err == nil {
-					cmd := string(file)
-					for k, v := range knownBrowsers {
-						if strings.Contains(cmd, k) {
-							playerName = v
-							break
-						}
-					}
+			break
+		}
+	}
+	if playerName == "Browser" {
+		file, err := ioutil.ReadFile(fmt.Sprintf("/proc/%d/cmdline", pid))
+		if err == nil {
+			cmd := string(file)
+			for key, val := range knownBrowsers {
+				if strings.Contains(cmd, key) {
+					playerName = val
+					break
 				}
 			}
-			break
 		}
 	}
 	p = &Player{
@@ -382,132 +382,153 @@ func main() {
 			fmt.Println("Response:")
 			fmt.Printf(response)
 		}
-	} else {
-		conn, err := dbus.SessionBus()
-		if err != nil {
-			panic(err)
-		}
-		players := &PlayerList{
-			conn: conn,
-		}
-		players.Reload()
-		players.Sort()
-		players.Refresh()
-		fmt.Println(players.JSON())
-		lastLine := ""
-		// fmt.Println("New array", players)
-		// Start command listener
+		os.Exit(0)
+	}
+	conn, err := dbus.SessionBus()
+	if err != nil {
+		log.Fatalln("Error connecting to DBus:", err)
+	}
+	players := &PlayerList{
+		conn: conn,
+	}
+	players.Reload()
+	players.Sort()
+	players.Refresh()
+	fmt.Println(players.JSON())
+	lastLine := ""
+	// fmt.Println("New array", players)
+	// Start command listener
+	if _, err := os.Stat(SOCK); err == nil {
+		fmt.Printf("Socket %s already exists, this could mean waybar-mpris is already running.\nStarting this instance will overwrite the file, possibly stopping other instances from accepting commands.\n", SOCK)
+		var input string
+		ignoreChoice := false
+		fmt.Printf("Continue? [y/n]: ")
 		go func() {
-			os.Remove(SOCK)
-			listener, err := net.Listen("unix", SOCK)
-			if err != nil {
-				log.Fatalln("Couldn't establish socket connection at", SOCK)
+			fmt.Scanln(&input)
+			if strings.Contains(input, "y") && !ignoreChoice {
+				os.Remove(SOCK)
 			}
-			defer listener.Close()
+		}()
+		time.Sleep(5 * time.Second)
+		if input == "" {
+			fmt.Printf("\nRemoving due to lack of input.\n")
+			ignoreChoice = true
+			os.Remove(SOCK)
+		}
+
+	}
+	go func() {
+		listener, err := net.Listen("unix", SOCK)
+		if err != nil {
+			log.Fatalln("Couldn't establish socket connection at", SOCK)
+		}
+		defer func() {
+			listener.Close()
+			os.Remove(SOCK)
+		}()
+		for {
+			con, err := listener.Accept()
+			if err != nil {
+				log.Println("Couldn't accept:", err)
+				continue
+			}
+			buf := make([]byte, 512)
+			nr, err := con.Read(buf)
+			if err != nil {
+				log.Println("Couldn't read:", err)
+				continue
+			}
+			command := string(buf[0:nr])
+			if command == "player-next" {
+				length := len(players.list)
+				if length != 1 {
+					if players.current < uint(length-1) {
+						players.current += 1
+					} else {
+						players.current = 0
+					}
+					players.Refresh()
+					fmt.Println(players.JSON())
+				}
+			} else if command == "player-prev" {
+				length := len(players.list)
+				if length != 1 {
+					if players.current != 0 {
+						players.current -= 1
+					} else {
+						players.current = uint(length - 1)
+					}
+					players.Refresh()
+					fmt.Println(players.JSON())
+				}
+			} else if command == "next" {
+				players.Next()
+			} else if command == "prev" {
+				players.Prev()
+			} else if command == "toggle" {
+				players.Toggle()
+			} else if command == "list" {
+				resp := ""
+				pad := 0
+				i := len(players.list)
+				for i != 0 {
+					i /= 10
+					pad++
+				}
+				for i, p := range players.list {
+					symbol := ""
+					if uint(i) == players.current {
+						symbol = "*"
+					}
+					resp += fmt.Sprintf("%0"+strconv.Itoa(pad)+"d%s: Name: %s; Playing: %t; PID: %d\n", i, symbol, p.fullName, p.playing, p.pid)
+				}
+				con.Write([]byte(resp))
+			} else {
+				fmt.Println("Invalid command")
+			}
+		}
+	}()
+
+	conn.BusObject().Call("org.freedesktop.DBus.AddMatch", 0, MATCH_NOC)
+	conn.BusObject().Call("org.freedesktop.DBus.AddMatch", 0, MATCH_PC)
+	if SHOW_POS {
+		go func() {
 			for {
-				con, err := listener.Accept()
-				if err != nil {
-					log.Println("Couldn't accept:", err)
-					continue
-				}
-				buf := make([]byte, 512)
-				nr, err := con.Read(buf)
-				if err != nil {
-					log.Println("Couldn't read:", err)
-					continue
-				}
-				command := string(buf[0:nr])
-				if command == "player-next" {
-					length := len(players.list)
-					if length != 1 {
-						if players.current < uint(length-1) {
-							players.current += 1
-						} else {
-							players.current = 0
-						}
-						players.Refresh()
-						fmt.Println(players.JSON())
-					}
-				} else if command == "player-prev" {
-					length := len(players.list)
-					if length != 1 {
-						if players.current != 0 {
-							players.current -= 1
-						} else {
-							players.current = uint(length - 1)
-						}
-						players.Refresh()
-						fmt.Println(players.JSON())
-					}
-				} else if command == "next" {
-					players.Next()
-				} else if command == "prev" {
-					players.Prev()
-				} else if command == "toggle" {
-					players.Toggle()
-				} else if command == "list" {
-					resp := ""
-					pad := 0
-					i := len(players.list)
-					for i != 0 {
-						i /= 10
-						pad++
-					}
-					for i, p := range players.list {
-						symbol := ""
-						if uint(i) == players.current {
-							symbol = "*"
-						}
-						resp += fmt.Sprintf("%0"+strconv.Itoa(pad)+"d%s: Name: %s; Playing: %t; PID: %d\n", i, symbol, p.fullName, p.playing, p.pid)
-					}
-					con.Write([]byte(resp))
-				} else {
-					fmt.Println("Invalid command")
+				time.Sleep(1000 * time.Millisecond)
+				if players.list[players.current].playing {
+					go fmt.Println(players.JSON())
 				}
 			}
 		}()
-
-		conn.BusObject().Call("org.freedesktop.DBus.AddMatch", 0, MATCH_NOC)
-		conn.BusObject().Call("org.freedesktop.DBus.AddMatch", 0, MATCH_PC)
-		if SHOW_POS {
-			go func() {
-				for {
-					time.Sleep(1000 * time.Millisecond)
-					if players.list[players.current].playing {
-						go fmt.Println(players.JSON())
+	}
+	c := make(chan *dbus.Signal, 10)
+	conn.Signal(c)
+	for v := range c {
+		// fmt.Printf("SIGNAL: Sender %s, Path %s, Name %s, Body %s\n", v.Sender, v.Path, v.Name, v.Body)
+		if strings.Contains(v.Name, "NameOwnerChanged") {
+			switch name := v.Body[0].(type) {
+			case string:
+				var pid uint32
+				conn.BusObject().Call("org.freedesktop.DBus.GetConnectionUnixProcessID", 0, name).Store(&pid)
+				// Ignore playerctld again
+				if strings.Contains(name, INTERFACE) && !strings.Contains(name, "playerctld") {
+					if pid == 0 {
+						// fmt.Println("Removing", name)
+						players.Remove(name)
+					} else {
+						// fmt.Println("Adding", name)
+						players.New(name)
 					}
 				}
-			}()
-		}
-		c := make(chan *dbus.Signal, 10)
-		conn.Signal(c)
-		for v := range c {
-			// fmt.Printf("SIGNAL: Sender %s, Path %s, Name %s, Body %s\n", v.Sender, v.Path, v.Name, v.Body)
-			if strings.Contains(v.Name, "NameOwnerChanged") {
-				switch name := v.Body[0].(type) {
-				case string:
-					var pid uint32
-					conn.BusObject().Call("org.freedesktop.DBus.GetConnectionUnixProcessID", 0, name).Store(&pid)
-					// Ignore playerctld again
-					if strings.Contains(name, INTERFACE) && !strings.Contains(name, "playerctld") {
-						if pid == 0 {
-							// fmt.Println("Removing", name)
-							players.Remove(name)
-						} else {
-							// fmt.Println("Adding", name)
-							players.New(name)
-						}
-					}
-				}
-			} else if strings.Contains(v.Name, "PropertiesChanged") && strings.Contains(v.Body[0].(string), INTERFACE+".Player") {
-				players.Refresh()
-				if AUTOFOCUS {
-					players.Sort()
-				}
-				if l := players.JSON(); l != lastLine {
-					lastLine = l
-					fmt.Println(l)
-				}
+			}
+		} else if strings.Contains(v.Name, "PropertiesChanged") && strings.Contains(v.Body[0].(string), INTERFACE+".Player") {
+			players.Refresh()
+			if AUTOFOCUS {
+				players.Sort()
+			}
+			if l := players.JSON(); l != lastLine {
+				lastLine = l
+				fmt.Println(l)
 			}
 		}
 	}
