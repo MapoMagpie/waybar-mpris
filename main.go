@@ -8,6 +8,7 @@ import (
 	"log"
 	"net"
 	"os"
+	"os/signal"
 	"sort"
 	"strconv"
 	"strings"
@@ -428,6 +429,14 @@ func main() {
 	}
 	go func() {
 		listener, err := net.Listen("unix", SOCK)
+		c := make(chan os.Signal, 1)
+		signal.Notify(c, os.Interrupt)
+		go func() {
+			<-c
+			os.Remove(SOCK)
+			os.Exit(1)
+		}()
+		defer os.Remove(SOCK)
 		if err != nil {
 			log.Fatalln("Couldn't establish socket connection at", SOCK)
 		}
@@ -504,8 +513,10 @@ func main() {
 		go func() {
 			for {
 				time.Sleep(1000 * time.Millisecond)
-				if players.list[players.current].playing {
-					go fmt.Println(players.JSON())
+				if len(players.list) != 0 {
+					if players.list[players.current].playing {
+						go fmt.Println(players.JSON())
+					}
 				}
 			}
 		}()
