@@ -157,7 +157,13 @@ func µsToString(µs int64) string {
 
 func (p *Player) Position() string {
 	// position is in microseconds so we prob need int64 to be safe
-	l := p.metadata["mpris:length"].Value().(int64)
+	v := p.metadata["mpris:length"].Value()
+	var l int64
+	if v != nil {
+		l = v.(int64)
+	} else {
+		return ""
+	}
 	length := µsToString(l)
 	if length == "" {
 		return ""
@@ -436,7 +442,6 @@ func main() {
 			os.Remove(SOCK)
 			os.Exit(1)
 		}()
-		defer os.Remove(SOCK)
 		if err != nil {
 			log.Fatalln("Couldn't establish socket connection at", SOCK)
 		}
