@@ -32,6 +32,7 @@ var knownBrowsers = map[string]string{
 type Player struct {
 	player                               dbus.BusObject
 	fullName, name, title, artist, album string
+	position                             int64
 	pid                                  uint32
 	playing, stopped                     bool
 	metadata                             map[string]dbus.Variant
@@ -47,16 +48,18 @@ const (
 	MATCH_PC = "type='signal',path='/org/mpris/MediaPlayer2',interface='org.freedesktop.DBus.Properties'"
 	SOCK     = "/tmp/waybar-mpris.sock"
 	LOGFILE  = "/tmp/waybar-mpris.log"
+	POLL     = 1
 )
 
 var (
-	PLAY      = "▶"
-	PAUSE     = ""
-	SEP       = " - "
-	ORDER     = "SYMBOL:ARTIST:ALBUM:TITLE:POSITION"
-	AUTOFOCUS = false
-	COMMANDS  = []string{"player-next", "player-prev", "next", "prev", "toggle", "list"}
-	SHOW_POS  = false
+	PLAY        = "▶"
+	PAUSE       = ""
+	SEP         = " - "
+	ORDER       = "SYMBOL:ARTIST:ALBUM:TITLE:POSITION"
+	AUTOFOCUS   = false
+	COMMANDS    = []string{"player-next", "player-prev", "next", "prev", "toggle", "list"}
+	SHOW_POS    = false
+	INTERPOLATE = false
 )
 
 // NewPlayer returns a new player object.
@@ -155,6 +158,7 @@ func µsToString(µs int64) string {
 	return fmt.Sprintf("%02d:%02d", minutes, seconds)
 }
 
+// inc is the increment in seconds to add if the player reports an identical position.
 func (p *Player) Position() string {
 	// position is in microseconds so we prob need int64 to be safe
 	v := p.metadata["mpris:length"].Value()
@@ -176,6 +180,11 @@ func (p *Player) Position() string {
 	if position == "" {
 		return ""
 	}
+	if INTERPOLATE && position == µsToString(p.position) {
+		np := p.position + int64(POLL*1000000)
+		position = µsToString(np)
+	}
+	p.position = pos.Value().(int64)
 	return position + "/" + length
 }
 
@@ -235,10 +244,10 @@ func (p *Player) JSON() string {
 
 	data["tooltip"] = fmt.Sprintf(
 		"%s\nby %s\n",
-		p.title,
-		p.artist)
+		strings.ReplaceAll(p.title, "&", "&amp;"),
+		strings.ReplaceAll(p.artist, "&", "&amp;"))
 	if p.album != "" {
-		data["tooltip"] += "from " + p.album + "\n"
+		data["tooltip"] += "from " + strings.ReplaceAll(p.album, "&", "&amp;") + "\n"
 	}
 	data["tooltip"] += "(" + p.name + ")"
 	data["text"] = text
@@ -374,6 +383,7 @@ func main() {
 	flag.StringVar(&ORDER, "order", ORDER, "Element order.")
 	flag.BoolVar(&AUTOFOCUS, "autofocus", AUTOFOCUS, "Auto switch to currently playing music players.")
 	flag.BoolVar(&SHOW_POS, "position", SHOW_POS, "Show current position between brackets, e.g (04:50/05:00)")
+	flag.BoolVar(&INTERPOLATE, "interpolate", INTERPOLATE, "Interpolate track position (helpful for players that don't update regularly, e.g mpDris2)")
 	var command string
 	flag.StringVar(&command, "send", "", "send command to already runnning waybar-mpris instance. (options: "+strings.Join(COMMANDS, "/")+")")
 	flag.Parse()
@@ -517,7 +527,7 @@ func main() {
 	if SHOW_POS {
 		go func() {
 			for {
-				time.Sleep(1000 * time.Millisecond)
+				time.Sleep(POLL * time.Second)
 				if len(players.list) != 0 {
 					if players.list[players.current].playing {
 						go fmt.Println(players.JSON())
