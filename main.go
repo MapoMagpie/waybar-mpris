@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/godbus/dbus/v5"
+	"github.com/hpcloud/tail"
 	flag "github.com/spf13/pflag"
 )
 
@@ -48,18 +49,21 @@ const (
 	MATCH_PC = "type='signal',path='/org/mpris/MediaPlayer2',interface='org.freedesktop.DBus.Properties'"
 	SOCK     = "/tmp/waybar-mpris.sock"
 	LOGFILE  = "/tmp/waybar-mpris.log"
+	OUTFILE  = "/tmp/waybar-mpris.out"
 	POLL     = 1
 )
 
 var (
-	PLAY        = "▶"
-	PAUSE       = ""
-	SEP         = " - "
-	ORDER       = "SYMBOL:ARTIST:ALBUM:TITLE:POSITION"
-	AUTOFOCUS   = false
-	COMMANDS    = []string{"player-next", "player-prev", "next", "prev", "toggle", "list"}
-	SHOW_POS    = false
-	INTERPOLATE = false
+	PLAY                  = "▶"
+	PAUSE                 = ""
+	SEP                   = " - "
+	ORDER                 = "SYMBOL:ARTIST:ALBUM:TITLE:POSITION"
+	AUTOFOCUS             = false
+	COMMANDS              = []string{"player-next", "player-prev", "next", "prev", "toggle", "list"}
+	SHOW_POS              = false
+	INTERPOLATE           = false
+	REPLACE               = false
+	WRITER      io.Writer = os.Stdout
 )
 
 // NewPlayer returns a new player object.
@@ -310,7 +314,7 @@ func (pl *PlayerList) Remove(fullName string) {
 		if !found {
 			pl.current = 0
 			pl.Refresh()
-			fmt.Println(pl.JSON())
+			fmt.Fprintln(WRITER, pl.JSON())
 		}
 	}
 	// ls[len(ls)-1], ls[i] = ls[i], ls[len(ls)-1]
@@ -384,8 +388,10 @@ func main() {
 	flag.BoolVar(&AUTOFOCUS, "autofocus", AUTOFOCUS, "Auto switch to currently playing music players.")
 	flag.BoolVar(&SHOW_POS, "position", SHOW_POS, "Show current position between brackets, e.g (04:50/05:00)")
 	flag.BoolVar(&INTERPOLATE, "interpolate", INTERPOLATE, "Interpolate track position (helpful for players that don't update regularly, e.g mpDris2)")
+	flag.BoolVar(&REPLACE, "replace", REPLACE, "replace existing waybar-mpris if found. When false, new instance will clone the original instances output.")
 	var command string
 	flag.StringVar(&command, "send", "", "send command to already runnning waybar-mpris instance. (options: "+strings.Join(COMMANDS, "/")+")")
+
 	flag.Parse()
 
 	if command != "" {
@@ -402,7 +408,7 @@ func main() {
 			buf := make([]byte, 512)
 			nr, err := conn.Read(buf)
 			if err != nil {
-				log.Fatalf("Couldn't read response.")
+				log.Fatalln("Couldn't read response.")
 			}
 			response := string(buf[0:nr])
 			fmt.Println("Response:")
@@ -420,28 +426,60 @@ func main() {
 	players.Reload()
 	players.Sort()
 	players.Refresh()
-	fmt.Println(players.JSON())
+	fmt.Fprintln(WRITER, players.JSON())
 	lastLine := ""
 	// fmt.Println("New array", players)
 	// Start command listener
 	if _, err := os.Stat(SOCK); err == nil {
-		fmt.Printf("Socket %s already exists, this could mean waybar-mpris is already running.\nStarting this instance will overwrite the file, possibly stopping other instances from accepting commands.\n", SOCK)
-		var input string
-		ignoreChoice := false
-		fmt.Printf("Continue? [y/n]: ")
-		go func() {
-			fmt.Scanln(&input)
-			if strings.Contains(input, "y") && !ignoreChoice {
-				os.Remove(SOCK)
+		if REPLACE {
+			fmt.Printf("Socket %s already exists, this could mean waybar-mpris is already running.\nStarting this instance will overwrite the file, possibly stopping other instances from accepting commands.\n", SOCK)
+			var input string
+			ignoreChoice := false
+			fmt.Printf("Continue? [y/n]: ")
+			go func() {
+				fmt.Scanln(&input)
+				if strings.Contains(input, "y") && !ignoreChoice {
+					os.Remove(SOCK)
+				}
+			}()
+			time.Sleep(5 * time.Second)
+			if input == "" {
+				fmt.Printf("\nRemoving due to lack of input.\n")
+				ignoreChoice = true
+				// os.Remove(SOCK)
 			}
-		}()
-		time.Sleep(5 * time.Second)
-		if input == "" {
-			fmt.Printf("\nRemoving due to lack of input.\n")
-			ignoreChoice = true
-			os.Remove(SOCK)
-		}
+		} else if conn, err := net.Dial("unix", SOCK); err == nil {
+			// When waybar-mpris is already running, we attach to its output instead of launching a whole new instance.
 
+			fmt.Println("waybar-mpris is already running. This instance will clone its output.")
+			if err != nil {
+				log.Fatalln("Couldn't dial:", err)
+			}
+			_, err = conn.Write([]byte("share"))
+			if err != nil {
+				log.Fatalln("Couldn't send command")
+			}
+			buf := make([]byte, 512)
+			nr, err := conn.Read(buf)
+			if err != nil {
+				log.Fatalln("Couldn't read response.")
+			}
+			if string(buf[0:nr]) == "success" {
+				t, err := tail.TailFile(OUTFILE, tail.Config{
+					Follow:    true,
+					MustExist: true,
+					Logger:    tail.DiscardingLogger,
+				})
+				if err == nil {
+					for line := range t.Lines {
+						fmt.Println(line.Text)
+					}
+				}
+			}
+		} else {
+			os.Remove(SOCK)
+			os.Remove(OUTFILE)
+		}
 	}
 	go func() {
 		listener, err := net.Listen("unix", SOCK)
@@ -449,11 +487,12 @@ func main() {
 		signal.Notify(c, os.Interrupt)
 		go func() {
 			<-c
+			os.Remove(OUTFILE)
 			os.Remove(SOCK)
 			os.Exit(1)
 		}()
 		if err != nil {
-			log.Fatalln("Couldn't establish socket connection at", SOCK)
+			log.Fatalf("Couldn't establish socket connection at %s (error %s)\n", SOCK, err)
 		}
 		defer func() {
 			listener.Close()
@@ -472,7 +511,8 @@ func main() {
 				continue
 			}
 			command := string(buf[0:nr])
-			if command == "player-next" {
+			switch command {
+			case "player-next":
 				length := len(players.list)
 				if length != 1 {
 					if players.current < uint(length-1) {
@@ -481,9 +521,9 @@ func main() {
 						players.current = 0
 					}
 					players.Refresh()
-					fmt.Println(players.JSON())
+					fmt.Fprintln(WRITER, players.JSON())
 				}
-			} else if command == "player-prev" {
+			case "player-prev":
 				length := len(players.list)
 				if length != 1 {
 					if players.current != 0 {
@@ -492,15 +532,15 @@ func main() {
 						players.current = uint(length - 1)
 					}
 					players.Refresh()
-					fmt.Println(players.JSON())
+					fmt.Fprintln(WRITER, players.JSON())
 				}
-			} else if command == "next" {
+			case "next":
 				players.Next()
-			} else if command == "prev" {
+			case "prev":
 				players.Prev()
-			} else if command == "toggle" {
+			case "toggle":
 				players.Toggle()
-			} else if command == "list" {
+			case "list":
 				resp := ""
 				pad := 0
 				i := len(players.list)
@@ -516,7 +556,14 @@ func main() {
 					resp += fmt.Sprintf("%0"+strconv.Itoa(pad)+"d%s: Name: %s; Playing: %t; PID: %d\n", i, symbol, p.fullName, p.playing, p.pid)
 				}
 				con.Write([]byte(resp))
-			} else {
+			case "share":
+				out, err := os.Create(OUTFILE)
+				if err != nil {
+					con.Write([]byte(fmt.Sprintf("Failed: %s", err)))
+				}
+				WRITER = io.MultiWriter(os.Stdout, out)
+				con.Write([]byte("success"))
+			default:
 				fmt.Println("Invalid command")
 			}
 		}
@@ -530,7 +577,7 @@ func main() {
 				time.Sleep(POLL * time.Second)
 				if len(players.list) != 0 {
 					if players.list[players.current].playing {
-						go fmt.Println(players.JSON())
+						go fmt.Fprintln(WRITER, players.JSON())
 					}
 				}
 			}
@@ -563,7 +610,7 @@ func main() {
 			}
 			if l := players.JSON(); l != lastLine {
 				lastLine = l
-				fmt.Println(l)
+				fmt.Fprintln(WRITER, l)
 			}
 		}
 	}

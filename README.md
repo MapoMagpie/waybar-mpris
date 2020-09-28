@@ -43,10 +43,12 @@ When running, the program will pipe out json in waybar's format. Add something l
 ```
 Usage of waybar-mpris:
       --autofocus          Auto switch to currently playing music players.
+      --interpolate        Interpolate track position (helpful for players that don't update regularly, e.g mpDris2)
       --order string       Element order. (default "SYMBOL:ARTIST:ALBUM:TITLE:POSITION")
       --pause string       Pause symbol/text to use. (default "\uf8e3")
       --play string        Play symbol/text to use. (default "▶")
       --position           Show current position between brackets, e.g (04:50/05:00)
+      --replace            Replace any running instances
       --send string        send command to already runnning waybar-mpris instance. (options: player-next/player-prev/next/prev/toggle)
       --separator string   Separator string to use between artist, album, and title. (default " - ")
 ```
@@ -56,6 +58,8 @@ Usage of waybar-mpris:
 * `--separator` specifies a string to separate the artist, album and title text.
 * `--autofocus` makes waybar-mpris automatically focus on currently playing music players.
 * `--position` enables the display of the track position.
+* `--interpolate` increments the track position every second. This is useful for players (e.g mpDris2) that don't regularly update the position.
+* `--replace`: By default, new instances will attach to the existing one so that the output is identical. This lets this instance replace any others running. It isn't recommended. 
 * `--send` sends commands to an already running waybar-mpris instance via a unix socket. Commands:
   * `player-next`: Switch to displaying and controlling next available player.
   * `player-prev`: Same as `player-next`, but for the previous player.
