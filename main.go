@@ -380,7 +380,6 @@ func main() {
 	}
 	mw := io.MultiWriter(logfile, os.Stdout)
 	log.SetOutput(mw)
-	os.Stderr = logfile
 	flag.StringVar(&PLAY, "play", PLAY, "Play symbol/text to use.")
 	flag.StringVar(&PAUSE, "pause", PAUSE, "Pause symbol/text to use.")
 	flag.StringVar(&SEP, "separator", SEP, "Separator string to use between artist, album, and title.")
@@ -393,6 +392,7 @@ func main() {
 	flag.StringVar(&command, "send", "", "send command to already runnning waybar-mpris instance. (options: "+strings.Join(COMMANDS, "/")+")")
 
 	flag.Parse()
+	os.Stderr = logfile
 
 	if command != "" {
 		conn, err := net.Dial("unix", SOCK)
