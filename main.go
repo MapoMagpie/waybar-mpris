@@ -450,8 +450,8 @@ func main() {
 			}
 		} else if conn, err := net.Dial("unix", SOCK); err == nil {
 			// When waybar-mpris is already running, we attach to its output instead of launching a whole new instance.
-
-			fmt.Println("waybar-mpris is already running. This instance will clone its output.")
+			// Print to stderr to avoid errors from waybar
+			os.Stderr.WriteString("waybar-mpris is already running. This instance will clone its output.")
 			if err != nil {
 				log.Fatalln("Couldn't dial:", err)
 			}
