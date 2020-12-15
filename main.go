@@ -30,6 +30,7 @@ var knownBrowsers = map[string]string{
 	"chromium": "Chromium",
 }
 
+// Player represents an active music player.
 type Player struct {
 	player                               dbus.BusObject
 	fullName, name, title, artist, album string
@@ -40,12 +41,13 @@ type Player struct {
 	conn                                 *dbus.Conn
 }
 
+// Various paths and values to use elsewhere.
 const (
 	INTERFACE = "org.mpris.MediaPlayer2"
 	PATH      = "/org/mpris/MediaPlayer2"
-	// NameOwnerChanged
+	// For the NameOwnerChanged signal.
 	MATCH_NOC = "type='signal',path='/org/freedesktop/DBus',interface='org.freedesktop.DBus',member='NameOwnerChanged'"
-	// PropertiesChanged
+	// For the PropertiesChanged signal. It doesn't match exactly (couldn't get that to work) so we check it manually.
 	MATCH_PC = "type='signal',path='/org/mpris/MediaPlayer2',interface='org.freedesktop.DBus.Properties'"
 	SOCK     = "/tmp/waybar-mpris.sock"
 	LOGFILE  = "/tmp/waybar-mpris.log"
@@ -53,12 +55,14 @@ const (
 	POLL     = 1
 )
 
+// Mostly default values for flag options.
 var (
-	PLAY                  = "▶"
-	PAUSE                 = ""
-	SEP                   = " - "
-	ORDER                 = "SYMBOL:ARTIST:ALBUM:TITLE:POSITION"
-	AUTOFOCUS             = false
+	PLAY      = "▶"
+	PAUSE     = ""
+	SEP       = " - "
+	ORDER     = "SYMBOL:ARTIST:ALBUM:TITLE:POSITION"
+	AUTOFOCUS = false
+	// Available commands that can be sent to running instances.
 	COMMANDS              = []string{"player-next", "player-prev", "next", "prev", "toggle", "list"}
 	SHOW_POS              = false
 	INTERPOLATE           = false
@@ -162,7 +166,7 @@ func µsToString(µs int64) string {
 	return fmt.Sprintf("%02d:%02d", minutes, seconds)
 }
 
-// inc is the increment in seconds to add if the player reports an identical position.
+// Position figures out the track position in MM:SS, interpolating the value if necessary.
 func (p *Player) Position() string {
 	// position is in microseconds so we prob need int64 to be safe
 	v := p.metadata["mpris:length"].Value()
@@ -192,6 +196,7 @@ func (p *Player) Position() string {
 	return position + "/" + length
 }
 
+// JSON returns json for waybar to consume.
 func (p *Player) JSON() string {
 	data := map[string]string{}
 	symbol := PLAY
@@ -210,22 +215,23 @@ func (p *Player) JSON() string {
 	var items []string
 	order := strings.Split(ORDER, ":")
 	for _, v := range order {
-		if v == "SYMBOL" {
+		switch v {
+		case "SYMBOL":
 			items = append(items, symbol)
-		} else if v == "ARTIST" {
+		case "ARTIST":
 			if p.artist != "" {
 				items = append(items, p.artist)
 			}
-		} else if v == "ALBUM" {
+		case "ALBUM":
 			if p.album != "" {
 				items = append(items, p.album)
 			}
-		} else if v == "TITLE" {
+		case "TITLE":
 			if p.title != "" {
 				items = append(items, p.title)
 			}
-		} else if v == "POSITION" && SHOW_POS {
-			if pos != "" {
+		case "POSITION":
+			if pos != "" && SHOW_POS {
 				items = append(items, pos)
 			}
 		}
@@ -262,19 +268,19 @@ func (p *Player) JSON() string {
 	return string(out)
 }
 
-type PlayerList struct {
-	list    List
+type availablePlayers struct {
+	list    playerArray
 	current uint
 	conn    *dbus.Conn
 }
 
-type List []*Player
+type playerArray []*Player
 
-func (ls List) Len() int {
+func (ls playerArray) Len() int {
 	return len(ls)
 }
 
-func (ls List) Less(i, j int) bool {
+func (ls playerArray) Less(i, j int) bool {
 	var states [2]uint8
 	for i, p := range []bool{ls[i].playing, ls[j].playing} {
 		if p {
@@ -285,11 +291,11 @@ func (ls List) Less(i, j int) bool {
 	return states[0] > states[1]
 }
 
-func (ls List) Swap(i, j int) {
+func (ls playerArray) Swap(i, j int) {
 	ls[i], ls[j] = ls[j], ls[i]
 }
 
-func (pl *PlayerList) Remove(fullName string) {
+func (pl *availablePlayers) Remove(fullName string) {
 	currentName := pl.list[pl.current].fullName
 	var i int
 	found := false
@@ -300,28 +306,27 @@ func (pl *PlayerList) Remove(fullName string) {
 			break
 		}
 	}
-	if found {
-		pl.list[0], pl.list[i] = pl.list[i], pl.list[0]
-		pl.list = pl.list[1:]
-		found = false
-		for ind, p := range pl.list {
-			if p.fullName == currentName {
-				pl.current = uint(ind)
-				found = true
-				break
-			}
-		}
-		if !found {
-			pl.current = 0
-			pl.Refresh()
-			fmt.Fprintln(WRITER, pl.JSON())
+	if !found {
+		return
+	}
+	pl.list[0], pl.list[i] = pl.list[i], pl.list[0]
+	pl.list = pl.list[1:]
+	found = false
+	for ind, p := range pl.list {
+		if p.fullName == currentName {
+			pl.current = uint(ind)
+			found = true
+			break
 		}
 	}
-	// ls[len(ls)-1], ls[i] = ls[i], ls[len(ls)-1]
-	// ls = ls[:len(ls)-1]
+	if !found {
+		pl.current = 0
+		pl.Refresh()
+		fmt.Fprintln(WRITER, pl.JSON())
+	}
 }
 
-func (pl *PlayerList) Reload() error {
+func (pl *availablePlayers) Reload() error {
 	var buses []string
 	err := pl.conn.BusObject().Call("org.freedesktop.DBus.ListNames", 0).Store(&buses)
 	if err != nil {
@@ -336,40 +341,40 @@ func (pl *PlayerList) Reload() error {
 	return nil
 }
 
-func (pl *PlayerList) New(name string) {
+func (pl *availablePlayers) New(name string) {
 	pl.list = append(pl.list, NewPlayer(pl.conn, name))
 	if AUTOFOCUS {
 		pl.current = uint(len(pl.list) - 1)
 	}
 }
 
-func (pl *PlayerList) Sort() {
+func (pl *availablePlayers) Sort() {
 	sort.Sort(pl.list)
 	pl.current = 0
 }
 
-func (pl *PlayerList) Refresh() {
+func (pl *availablePlayers) Refresh() {
 	for i := range pl.list {
 		pl.list[i].Refresh()
 	}
 }
 
-func (pl *PlayerList) JSON() string {
+func (pl *availablePlayers) JSON() string {
 	if len(pl.list) != 0 {
 		return pl.list[pl.current].JSON()
 	}
 	return "{}"
 }
 
-func (pl *PlayerList) Next() {
+func (pl *availablePlayers) Next() {
 	pl.list[pl.current].player.Call(INTERFACE+".Player.Next", 0)
 }
 
-func (pl *PlayerList) Prev() {
+func (pl *availablePlayers) Prev() {
 	pl.list[pl.current].player.Call(INTERFACE+".Player.Previous", 0)
 }
 
-func (pl *PlayerList) Toggle() {
+func (pl *availablePlayers) Toggle() {
 	pl.list[pl.current].player.Call(INTERFACE+".Player.PlayPause", 0)
 }
 
@@ -420,7 +425,7 @@ func main() {
 	if err != nil {
 		log.Fatalln("Error connecting to DBus:", err)
 	}
-	players := &PlayerList{
+	players := &availablePlayers{
 		conn: conn,
 	}
 	players.Reload()
@@ -516,7 +521,7 @@ func main() {
 				length := len(players.list)
 				if length != 1 {
 					if players.current < uint(length-1) {
-						players.current += 1
+						players.current++
 					} else {
 						players.current = 0
 					}
@@ -527,7 +532,7 @@ func main() {
 				length := len(players.list)
 				if length != 1 {
 					if players.current != 0 {
-						players.current -= 1
+						players.current--
 					} else {
 						players.current = uint(length - 1)
 					}
