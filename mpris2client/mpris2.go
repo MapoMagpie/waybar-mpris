@@ -229,6 +229,8 @@ type Mpris2 struct {
 	interpolate bool
 	poll        int
 	autofocus   bool
+	// playerctld mirrors property changes of other players, so we store its UID here to ignore it.
+	playerctldUID string
 }
 
 func NewMpris2(conn *dbus.Conn, interpolate bool, poll int, autofocus bool) *Mpris2 {
@@ -254,8 +256,11 @@ func (pl *Mpris2) Listen() {
 			case string:
 				var pid uint32
 				pl.conn.BusObject().Call("org.freedesktop.DBus.GetConnectionUnixProcessID", 0, name).Store(&pid)
-				// Ignore playerctld again
-				if strings.Contains(name, INTERFACE) && !strings.Contains(name, "playerctld") {
+				// Ignore playerctld
+				if strings.Contains(name, "playerctld") {
+					// Store UID so we know to ignore it later
+					pl.playerctldUID = v.Sender
+				} else if strings.Contains(name, INTERFACE) {
 					if pid == 0 {
 						pl.Remove(name)
 						pl.Messages <- Message{Name: "remove", Value: name}
@@ -265,7 +270,7 @@ func (pl *Mpris2) Listen() {
 					}
 				}
 			}
-		} else if strings.Contains(v.Name, "PropertiesChanged") && strings.Contains(v.Body[0].(string), INTERFACE+".Player") {
+		} else if strings.Contains(v.Name, "PropertiesChanged") && strings.Contains(v.Body[0].(string), INTERFACE+".Player") && v.Sender != pl.playerctldUID {
 			pl.Refresh()
 		}
 	}
@@ -310,7 +315,12 @@ func (pl *Mpris2) Reload() error {
 	}
 	for _, name := range buses {
 		// Don't add playerctld, it just duplicates other players
-		if strings.HasPrefix(name, INTERFACE) && !strings.Contains(name, "playerctld") {
+		if strings.Contains(name, "playerctld") {
+			// Store its UID
+			uid := ""
+			pl.conn.BusObject().Call("org.freedesktop.DBus.GetNameOwner", 0, name).Store(&uid)
+			pl.playerctldUID = uid
+		} else if strings.HasPrefix(name, INTERFACE) {
 			pl.New(name)
 		}
 	}
