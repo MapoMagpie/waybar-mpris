@@ -8,6 +8,7 @@ a waybar component/utility for displaying and controlling MPRIS2 compliant media
 
 MPRIS2 is widely supported, so this component should work with:
 * Chrome/Chromium
+* Firefox (Potentially, with `media.hardwaremediakeys.enabled = true` in about:config)
 * Other browsers (with kde plasma integration installed)
 * VLC
 * Spotify

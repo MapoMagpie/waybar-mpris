@@ -4,55 +4,25 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"log"
 	"net"
 	"os"
 	"os/signal"
-	"sort"
-	"strconv"
 	"strings"
 	"time"
 
+	mpris2 "git.hrfee.pw/hrfee/waybar-mpris/mpris2client"
 	"github.com/godbus/dbus/v5"
 	"github.com/hpcloud/tail"
 	flag "github.com/spf13/pflag"
 )
 
-var knownPlayers = map[string]string{
-	"plasma-browser-integration": "Browser",
-	"noson":                      "Noson",
-}
-
-var knownBrowsers = map[string]string{
-	"mozilla":  "Firefox",
-	"chrome":   "Chrome",
-	"chromium": "Chromium",
-}
-
-// Player represents an active music player.
-type Player struct {
-	player                               dbus.BusObject
-	fullName, name, title, artist, album string
-	position                             int64
-	pid                                  uint32
-	playing, stopped                     bool
-	metadata                             map[string]dbus.Variant
-	conn                                 *dbus.Conn
-}
-
 // Various paths and values to use elsewhere.
 const (
-	INTERFACE = "org.mpris.MediaPlayer2"
-	PATH      = "/org/mpris/MediaPlayer2"
-	// For the NameOwnerChanged signal.
-	MATCH_NOC = "type='signal',path='/org/freedesktop/DBus',interface='org.freedesktop.DBus',member='NameOwnerChanged'"
-	// For the PropertiesChanged signal. It doesn't match exactly (couldn't get that to work) so we check it manually.
-	MATCH_PC = "type='signal',path='/org/mpris/MediaPlayer2',interface='org.freedesktop.DBus.Properties'"
-	SOCK     = "/tmp/waybar-mpris.sock"
-	LOGFILE  = "/tmp/waybar-mpris.log"
-	OUTFILE  = "/tmp/waybar-mpris.out"
-	POLL     = 1
+	SOCK    = "/tmp/waybar-mpris.sock"
+	LOGFILE = "/tmp/waybar-mpris.log"
+	OUTFILE = "/tmp/waybar-mpris.out"
+	POLL    = 1
 )
 
 // Mostly default values for flag options.
@@ -70,144 +40,18 @@ var (
 	WRITER      io.Writer = os.Stdout
 )
 
-// NewPlayer returns a new player object.
-func NewPlayer(conn *dbus.Conn, name string) (p *Player) {
-	playerName := strings.ReplaceAll(name, INTERFACE+".", "")
-	var pid uint32
-	conn.BusObject().Call("org.freedesktop.DBus.GetConnectionUnixProcessID", 0, name).Store(&pid)
-	for key, val := range knownPlayers {
-		if strings.Contains(name, key) {
-			playerName = val
-			break
-		}
-	}
-	if playerName == "Browser" {
-		file, err := ioutil.ReadFile(fmt.Sprintf("/proc/%d/cmdline", pid))
-		if err == nil {
-			cmd := string(file)
-			for key, val := range knownBrowsers {
-				if strings.Contains(cmd, key) {
-					playerName = val
-					break
-				}
-			}
-		}
-	}
-	p = &Player{
-		player:   conn.Object(name, PATH),
-		conn:     conn,
-		name:     playerName,
-		fullName: name,
-		pid:      pid,
-	}
-	p.Refresh()
-	return
-}
-
-// Refresh grabs playback info.
-func (p *Player) Refresh() (err error) {
-	val, err := p.player.GetProperty(INTERFACE + ".Player.PlaybackStatus")
-	if err != nil {
-		p.playing = false
-		p.stopped = false
-		p.metadata = map[string]dbus.Variant{}
-		p.title = ""
-		p.artist = ""
-		p.album = ""
-		return
-	}
-	strVal := val.String()
-	if strings.Contains(strVal, "Playing") {
-		p.playing = true
-		p.stopped = false
-	} else if strings.Contains(strVal, "Paused") {
-		p.playing = false
-		p.stopped = false
-	} else {
-		p.playing = false
-		p.stopped = true
-	}
-	metadata, err := p.player.GetProperty(INTERFACE + ".Player.Metadata")
-	if err != nil {
-		p.metadata = map[string]dbus.Variant{}
-		p.title = ""
-		p.artist = ""
-		p.album = ""
-		return
-	}
-	p.metadata = metadata.Value().(map[string]dbus.Variant)
-	switch artist := p.metadata["xesam:artist"].Value().(type) {
-	case []string:
-		p.artist = strings.Join(artist, ", ")
-	case string:
-		p.artist = artist
-	default:
-		p.artist = ""
-	}
-	switch title := p.metadata["xesam:title"].Value().(type) {
-	case string:
-		p.title = title
-	default:
-		p.title = ""
-	}
-	switch album := p.metadata["xesam:album"].Value().(type) {
-	case string:
-		p.album = album
-	default:
-		p.album = ""
-	}
-	return nil
-}
-
-func µsToString(µs int64) string {
-	seconds := int(µs / 1e6)
-	minutes := int(seconds / 60)
-	seconds -= minutes * 60
-	return fmt.Sprintf("%02d:%02d", minutes, seconds)
-}
-
-// Position figures out the track position in MM:SS, interpolating the value if necessary.
-func (p *Player) Position() string {
-	// position is in microseconds so we prob need int64 to be safe
-	v := p.metadata["mpris:length"].Value()
-	var l int64
-	if v != nil {
-		l = v.(int64)
-	} else {
-		return ""
-	}
-	length := µsToString(l)
-	if length == "" {
-		return ""
-	}
-	pos, err := p.player.GetProperty(INTERFACE + ".Player.Position")
-	if err != nil {
-		return ""
-	}
-	position := µsToString(pos.Value().(int64))
-	if position == "" {
-		return ""
-	}
-	if INTERPOLATE && position == µsToString(p.position) {
-		np := p.position + int64(POLL*1000000)
-		position = µsToString(np)
-	}
-	p.position = pos.Value().(int64)
-	return position + "/" + length
-}
-
 // JSON returns json for waybar to consume.
-func (p *Player) JSON() string {
+func playerJSON(p *mpris2.Player) string {
 	data := map[string]string{}
 	symbol := PLAY
 	data["class"] = "paused"
-	if p.playing {
+	if p.Playing {
 		symbol = PAUSE
 		data["class"] = "playing"
 	}
 	var pos string
 	if SHOW_POS {
-		pos = p.Position()
+		pos = p.StringPosition()
 		if pos != "" {
 			pos = "(" + pos + ")"
 		}
@@ -219,16 +63,16 @@ func (p *Player) JSON() string {
 		case "SYMBOL":
 			items = append(items, symbol)
 		case "ARTIST":
-			if p.artist != "" {
-				items = append(items, p.artist)
+			if p.Artist != "" {
+				items = append(items, p.Artist)
 			}
 		case "ALBUM":
-			if p.album != "" {
-				items = append(items, p.album)
+			if p.Album != "" {
+				items = append(items, p.Album)
 			}
 		case "TITLE":
-			if p.title != "" {
-				items = append(items, p.title)
+			if p.Title != "" {
+				items = append(items, p.Title)
 			}
 		case "POSITION":
 			if pos != "" && SHOW_POS {
@@ -254,12 +98,12 @@ func (p *Player) JSON() string {
 
 	data["tooltip"] = fmt.Sprintf(
 		"%s\nby %s\n",
-		strings.ReplaceAll(p.title, "&", "&amp;"),
-		strings.ReplaceAll(p.artist, "&", "&amp;"))
-	if p.album != "" {
-		data["tooltip"] += "from " + strings.ReplaceAll(p.album, "&", "&amp;") + "\n"
+		strings.ReplaceAll(p.Title, "&", "&amp;"),
+		strings.ReplaceAll(p.Artist, "&", "&amp;"))
+	if p.Album != "" {
+		data["tooltip"] += "from " + strings.ReplaceAll(p.Album, "&", "&amp;") + "\n"
 	}
-	data["tooltip"] += "(" + p.name + ")"
+	data["tooltip"] += "(" + p.Name + ")"
 	data["text"] = text
 	out, err := json.Marshal(data)
 	if err != nil {
@@ -268,115 +112,22 @@ func (p *Player) JSON() string {
 	return string(out)
 }
 
-type availablePlayers struct {
-	list    playerArray
-	current uint
-	conn    *dbus.Conn
+type players struct {
+	mpris2 *mpris2.Mpris2
 }
 
-type playerArray []*Player
-
-func (ls playerArray) Len() int {
-	return len(ls)
-}
-
-func (ls playerArray) Less(i, j int) bool {
-	var states [2]uint8
-	for i, p := range []bool{ls[i].playing, ls[j].playing} {
-		if p {
-			states[i] = 1
-		}
-	}
-	// Reverse order
-	return states[0] > states[1]
-}
-
-func (ls playerArray) Swap(i, j int) {
-	ls[i], ls[j] = ls[j], ls[i]
-}
-
-func (pl *availablePlayers) Remove(fullName string) {
-	currentName := pl.list[pl.current].fullName
-	var i int
-	found := false
-	for ind, p := range pl.list {
-		if p.fullName == fullName {
-			i = ind
-			found = true
-			break
-		}
-	}
-	if !found {
-		return
-	}
-	pl.list[0], pl.list[i] = pl.list[i], pl.list[0]
-	pl.list = pl.list[1:]
-	found = false
-	for ind, p := range pl.list {
-		if p.fullName == currentName {
-			pl.current = uint(ind)
-			found = true
-			break
-		}
-	}
-	if !found {
-		pl.current = 0
-		pl.Refresh()
-		fmt.Fprintln(WRITER, pl.JSON())
-	}
-}
-
-func (pl *availablePlayers) Reload() error {
-	var buses []string
-	err := pl.conn.BusObject().Call("org.freedesktop.DBus.ListNames", 0).Store(&buses)
-	if err != nil {
-		return err
-	}
-	for _, name := range buses {
-		// Don't add playerctld, it just duplicates other players
-		if strings.HasPrefix(name, INTERFACE) && !strings.Contains(name, "playerctld") {
-			pl.New(name)
-		}
-	}
-	return nil
-}
-
-func (pl *availablePlayers) New(name string) {
-	pl.list = append(pl.list, NewPlayer(pl.conn, name))
-	if AUTOFOCUS {
-		pl.current = uint(len(pl.list) - 1)
-	}
-}
-
-func (pl *availablePlayers) Sort() {
-	sort.Sort(pl.list)
-	pl.current = 0
-}
-
-func (pl *availablePlayers) Refresh() {
-	for i := range pl.list {
-		pl.list[i].Refresh()
-	}
-}
-
-func (pl *availablePlayers) JSON() string {
-	if len(pl.list) != 0 {
-		return pl.list[pl.current].JSON()
+func (pl *players) JSON() string {
+	if len(pl.mpris2.List) != 0 {
+		return playerJSON(pl.mpris2.List[pl.mpris2.Current])
 	}
 	return "{}"
 }
 
-func (pl *availablePlayers) Next() {
-	pl.list[pl.current].player.Call(INTERFACE+".Player.Next", 0)
-}
+func (pl *players) Next() { pl.mpris2.List[pl.mpris2.Current].Next() }
 
-func (pl *availablePlayers) Prev() {
-	pl.list[pl.current].player.Call(INTERFACE+".Player.Previous", 0)
-}
+func (pl *players) Prev() { pl.mpris2.List[pl.mpris2.Current].Previous() }
 
-func (pl *availablePlayers) Toggle() {
-	pl.list[pl.current].player.Call(INTERFACE+".Player.PlayPause", 0)
-}
+func (pl *players) Toggle() { pl.mpris2.List[pl.mpris2.Current].Toggle() }
 
 func main() {
 	logfile, err := os.OpenFile(LOGFILE, os.O_CREATE|os.O_APPEND|os.O_RDWR, 0666)
@@ -421,18 +172,6 @@ func main() {
 		}
 		os.Exit(0)
 	}
-	conn, err := dbus.SessionBus()
-	if err != nil {
-		log.Fatalln("Error connecting to DBus:", err)
-	}
-	players := &availablePlayers{
-		conn: conn,
-	}
-	players.Reload()
-	players.Sort()
-	players.Refresh()
-	fmt.Fprintln(WRITER, players.JSON())
-	lastLine := ""
 	// fmt.Println("New array", players)
 	// Start command listener
 	if _, err := os.Stat(SOCK); err == nil {
@@ -486,6 +225,16 @@ func main() {
 			os.Remove(OUTFILE)
 		}
 	}
+	conn, err := dbus.SessionBus()
+	if err != nil {
+		log.Fatalln("Error connecting to DBus:", err)
+	}
+	players := &players{
+		mpris2: mpris2.NewMpris2(conn, INTERPOLATE, POLL, AUTOFOCUS),
+	}
+	players.mpris2.Reload()
+	players.mpris2.Sort()
+	lastLine := ""
 	go func() {
 		listener, err := net.Listen("unix", SOCK)
 		c := make(chan os.Signal, 1)
@@ -518,26 +267,24 @@ func main() {
 			command := string(buf[0:nr])
 			switch command {
 			case "player-next":
-				length := len(players.list)
+				length := len(players.mpris2.List)
 				if length != 1 {
-					if players.current < uint(length-1) {
-						players.current++
+					if players.mpris2.Current < uint(length-1) {
+						players.mpris2.Current++
 					} else {
-						players.current = 0
+						players.mpris2.Current = 0
 					}
-					players.Refresh()
-					fmt.Fprintln(WRITER, players.JSON())
+					players.mpris2.Refresh()
 				}
 			case "player-prev":
-				length := len(players.list)
+				length := len(players.mpris2.List)
 				if length != 1 {
-					if players.current != 0 {
-						players.current--
+					if players.mpris2.Current != 0 {
+						players.mpris2.Current--
 					} else {
-						players.current = uint(length - 1)
+						players.mpris2.Current = uint(length - 1)
 					}
-					players.Refresh()
-					fmt.Fprintln(WRITER, players.JSON())
+					players.mpris2.Refresh()
 				}
 			case "next":
 				players.Next()
@@ -546,21 +293,7 @@ func main() {
 			case "toggle":
 				players.Toggle()
 			case "list":
-				resp := ""
-				pad := 0
-				i := len(players.list)
-				for i != 0 {
-					i /= 10
-					pad++
-				}
-				for i, p := range players.list {
-					symbol := ""
-					if uint(i) == players.current {
-						symbol = "*"
-					}
-					resp += fmt.Sprintf("%0"+strconv.Itoa(pad)+"d%s: Name: %s; Playing: %t; PID: %d\n", i, symbol, p.fullName, p.playing, p.pid)
-				}
-				con.Write([]byte(resp))
+				con.Write([]byte(players.mpris2.String()))
 			case "share":
 				out, err := os.Create(OUTFILE)
 				if err != nil {
@@ -573,45 +306,24 @@ func main() {
 			}
 		}
 	}()
-
-	conn.BusObject().Call("org.freedesktop.DBus.AddMatch", 0, MATCH_NOC)
-	conn.BusObject().Call("org.freedesktop.DBus.AddMatch", 0, MATCH_PC)
+	go players.mpris2.Listen()
 	if SHOW_POS {
 		go func() {
 			for {
 				time.Sleep(POLL * time.Second)
-				if len(players.list) != 0 {
-					if players.list[players.current].playing {
+				if len(players.mpris2.List) != 0 {
+					if players.mpris2.List[players.mpris2.Current].Playing {
 						go fmt.Fprintln(WRITER, players.JSON())
 					}
 				}
 			}
 		}()
 	}
-	c := make(chan *dbus.Signal, 10)
-	conn.Signal(c)
-	for v := range c {
-		// fmt.Printf("SIGNAL: Sender %s, Path %s, Name %s, Body %s\n", v.Sender, v.Path, v.Name, v.Body)
-		if strings.Contains(v.Name, "NameOwnerChanged") {
-			switch name := v.Body[0].(type) {
-			case string:
-				var pid uint32
-				conn.BusObject().Call("org.freedesktop.DBus.GetConnectionUnixProcessID", 0, name).Store(&pid)
-				// Ignore playerctld again
-				if strings.Contains(name, INTERFACE) && !strings.Contains(name, "playerctld") {
-					if pid == 0 {
-						// fmt.Println("Removing", name)
-						players.Remove(name)
-					} else {
-						// fmt.Println("Adding", name)
-						players.New(name)
-					}
-				}
-			}
-		} else if strings.Contains(v.Name, "PropertiesChanged") && strings.Contains(v.Body[0].(string), INTERFACE+".Player") {
-			players.Refresh()
+	fmt.Fprintln(WRITER, players.JSON())
+	for v := range players.mpris2.Messages {
+		if v.Name == "refresh" {
 			if AUTOFOCUS {
-				players.Sort()
+				players.mpris2.Sort()
 			}
 			if l := players.JSON(); l != lastLine {
 				lastLine = l
@@ -619,4 +331,5 @@ func main() {
 			}
 		}
 	}
+	players.mpris2.Refresh()
 }
