@@ -11,9 +11,9 @@ import (
 	"strings"
 	"time"
 
-	mpris2 "git.hrfee.pw/hrfee/waybar-mpris/mpris2client"
 	"github.com/godbus/dbus/v5"
 	"github.com/hpcloud/tail"
+	mpris2 "github.com/hrfee/mpris2client"
 	flag "github.com/spf13/pflag"
 )
 
