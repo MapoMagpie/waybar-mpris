@@ -19,7 +19,7 @@ MPRIS2 is widely supported, so this component should work with:
 ## Install
 `go get git.hrfee.pw/hrfee/waybar-mpris` will install the program, as well as the go dbus bindings and pflags for command-line arguments.
 
-or just grab the `waybar-mpris` binary from here and place it in your PATH.
+or download a precompiled binary from [here](https://builds2.hrfee.pw/view/hrfee/waybar-mpris).
 
 ## Usage
 When running, the program will pipe out json in waybar's format. Add something like this to your waybar `config.json`:
