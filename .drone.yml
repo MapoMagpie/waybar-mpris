@@ -6,7 +6,7 @@ steps:
     - name: build
       image: golang:latest
       commands:
-        - apt install -y curl
+        - apt install -y python3-pip curl
         - go mod download
         - curl -sL https://git.io/goreleaser > goreleaser.sh
         - chmod +x goreleaser.sh
