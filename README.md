@@ -8,8 +8,8 @@ a waybar component/utility for displaying and controlling MPRIS2 compliant media
 
 MPRIS2 is widely supported, so this component should work with:
 * Chrome/Chromium
-* Firefox (Potentially, with `media.hardwaremediakeys.enabled = true` in about:config)
-* Other browsers (with kde plasma integration installed)
+* Firefox (Limited support with `media.hardwaremediakeys.enabled = true` in about:config)
+* Other browsers (using KDE Plasma Integration)
 * VLC
 * Spotify
 * Noson
@@ -17,9 +17,11 @@ MPRIS2 is widely supported, so this component should work with:
 * Most other music/media players
 
 ## Install
-`go get git.hrfee.pw/hrfee/waybar-mpris` will install the program, as well as the go dbus bindings and pflags for command-line arguments.
+Available on the AUR as [waybar-mpris-git](https://aur.archlinux.org/packages/waybar-mpris-git/) (Thanks @nichobi!)
 
-or download a precompiled binary from [here](https://builds2.hrfee.pw/view/hrfee/waybar-mpris).
+`go get git.hrfee.pw/hrfee/waybar-mpris` will compile from source and install.
+
+You can also download a precompiled binaries from [here](https://builds2.hrfee.pw/view/hrfee/waybar-mpris).
 
 ## Usage
 When running, the program will pipe out json in waybar's format. Add something like this to your waybar `config.json`:
@@ -66,4 +68,4 @@ Usage of waybar-mpris:
   * `player-prev`: Same as `player-next`, but for the previous player.
   * `next/prev`: Next/previous track on the selected player.
   * `toggle`: Play/pause.
-  * *Note: you can also bind these commands to keys in your sway/other wm config.*
+  * You can also bind these commands to Media keys in your WM config.
