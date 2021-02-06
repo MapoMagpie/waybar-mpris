@@ -23,6 +23,8 @@ Available on the AUR as [waybar-mpris-git](https://aur.archlinux.org/packages/wa
 
 You can also download a precompiled binaries from [here](https://builds2.hrfee.pw/view/hrfee/waybar-mpris).
 
+## Issues
+Stick them on [mpris2client](https://github.com/hrfee/mpris2client) or the [og](https://github.com/hrfee/waybar-mpris) repository (both on github) if you can't make an account here.
 ## Usage
 When running, the program will pipe out json in waybar's format. Add something like this to your waybar `config.json`:
 ```
