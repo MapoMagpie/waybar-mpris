@@ -97,11 +97,10 @@ func playerJSON(p *mpris2.Player) string {
 		text += v + right
 	}
 	out += "\",\"text\":\"" + text + "\","
-	out += "\"tooltip\":\"" + fmt.Sprintf(
-		"%s\\nby %s\\n",
-		strings.ReplaceAll(p.Title, "&", "&amp;"),
-		strings.ReplaceAll(p.Artist, "&", "&amp;"),
-	)
+	out += "\"tooltip\":\"" + strings.ReplaceAll(p.Title, "&", "&amp;") + "\\n"
+	if p.Artist != "" {
+		out += "by " + strings.ReplaceAll(p.Artist, "&", "&amp;") + "\\n"
+	}
 	if p.Album != "" {
 		out += "from " + strings.ReplaceAll(p.Album, "&", "&amp;") + "\\n"
 	}
