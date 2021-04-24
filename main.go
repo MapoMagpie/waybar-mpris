@@ -11,8 +11,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/fsnotify/fsnotify"
 	"github.com/godbus/dbus/v5"
-	"github.com/hpcloud/tail"
 	mpris2 "github.com/hrfee/mpris2client"
 	flag "github.com/spf13/pflag"
 )
@@ -37,6 +37,7 @@ var (
 	SHOW_POS              = false
 	INTERPOLATE           = false
 	REPLACE               = false
+	isSharing             = false
 	WRITER      io.Writer = os.Stdout
 )
 
@@ -129,6 +130,182 @@ func (pl *players) Prev() { pl.mpris2.List[pl.mpris2.Current].Previous() }
 
 func (pl *players) Toggle() { pl.mpris2.List[pl.mpris2.Current].Toggle() }
 
+func execCommand(cmd string) {
+	conn, err := net.Dial("unix", SOCK)
+	if err != nil {
+		log.Fatalln("Couldn't dial:", err)
+	}
+	_, err = conn.Write([]byte(cmd))
+	if err != nil {
+		log.Fatalln("Couldn't send command")
+	}
+	fmt.Println("Sent.")
+	if cmd == "list" {
+		buf := make([]byte, 512)
+		nr, err := conn.Read(buf)
+		if err != nil {
+			log.Fatalln("Couldn't read response.")
+		}
+		response := string(buf[0:nr])
+		fmt.Println("Response:")
+		fmt.Printf(response)
+	}
+	os.Exit(0)
+}
+
+func duplicateOutput(conn net.Conn) {
+	// Print to stderr to avoid errors from waybar
+	os.Stderr.WriteString("waybar-mpris is already running. This instance will clone its output.")
+	// Tell other instance to share output in OUTFILE
+	_, err := conn.Write([]byte("share"))
+	if err != nil {
+		log.Fatalf("Couldn't send command: %v", err)
+	}
+	buf := make([]byte, 512)
+	nr, err := conn.Read(buf)
+	if err != nil {
+		log.Fatalf("Couldn't read response: %v", err)
+	}
+	if resp := string(buf[0:nr]); resp == "success" {
+		// t, err := tail.TailFile(OUTFILE, tail.Config{
+		// 	Follow:    true,
+		// 	MustExist: true,
+		// 	Logger:    tail.DiscardingLogger,
+		// })
+		// if err == nil {
+		// 	for line := range t.Lines {
+		// 		fmt.Println(line.Text)
+		// 	}
+		// }
+		f, err := os.Open(OUTFILE)
+		if err != nil {
+			log.Fatalf("Failed to open \"%s\": %v", OUTFILE, err)
+		}
+		watcher, err := fsnotify.NewWatcher()
+		if err != nil {
+			log.Fatalf("Failed to start watcher: %v", err)
+		}
+		defer watcher.Close()
+		err = watcher.Add(OUTFILE)
+		if err != nil {
+			log.Fatalf("Failed to watch file: %v", err)
+		}
+		for {
+			select {
+			case event, ok := <-watcher.Events:
+				if !ok {
+					log.Printf("Watcher failed: %v", err)
+					return
+				}
+				if event.Op&fsnotify.Write == fsnotify.Write {
+					l, err := io.ReadAll(f)
+					if err != nil {
+						log.Printf("Failed to read file: %v", err)
+						return
+					}
+					str := string(l)
+					if str[len(str)-2:] == "\n\n" {
+						fmt.Print(str[:len(str)-1])
+					} else {
+						fmt.Print(string(l))
+					}
+					f.Seek(0, 0)
+				}
+			}
+		}
+	}
+
+}
+
+func listenForCommands(players *players) {
+	listener, err := net.Listen("unix", SOCK)
+	c := make(chan os.Signal, 1)
+	signal.Notify(c, os.Interrupt)
+	go func() {
+		<-c
+		os.Remove(OUTFILE)
+		os.Remove(SOCK)
+		os.Exit(1)
+	}()
+	if err != nil {
+		log.Fatalf("Couldn't establish socket connection at %s (error %s)\n", SOCK, err)
+	}
+	defer func() {
+		listener.Close()
+		os.Remove(SOCK)
+	}()
+	for {
+		con, err := listener.Accept()
+		if err != nil {
+			log.Println("Couldn't accept:", err)
+			continue
+		}
+		buf := make([]byte, 512)
+		nr, err := con.Read(buf)
+		if err != nil {
+			log.Println("Couldn't read:", err)
+			continue
+		}
+		command := string(buf[0:nr])
+		switch command {
+		case "player-next":
+			length := len(players.mpris2.List)
+			if length != 1 {
+				if players.mpris2.Current < uint(length-1) {
+					players.mpris2.Current++
+				} else {
+					players.mpris2.Current = 0
+				}
+				players.mpris2.Refresh()
+			}
+		case "player-prev":
+			length := len(players.mpris2.List)
+			if length != 1 {
+				if players.mpris2.Current != 0 {
+					players.mpris2.Current--
+				} else {
+					players.mpris2.Current = uint(length - 1)
+				}
+				players.mpris2.Refresh()
+			}
+		case "next":
+			players.Next()
+		case "prev":
+			players.Prev()
+		case "toggle":
+			players.Toggle()
+		case "list":
+			con.Write([]byte(players.mpris2.String()))
+		case "share":
+			if !isSharing {
+				f, err := os.OpenFile(OUTFILE, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0666)
+				defer f.Close()
+				if err != nil {
+					fmt.Fprintf(con, "Failed: %v", err)
+				}
+				var out io.Writer = emptyEveryWrite{file: f}
+				WRITER = io.MultiWriter(os.Stdout, out)
+				isSharing = true
+			}
+			fmt.Fprint(con, "success")
+		default:
+			fmt.Println("Invalid command")
+		}
+	}
+}
+
+type emptyEveryWrite struct {
+	file *os.File
+}
+
+func (w emptyEveryWrite) Write(p []byte) (n int, err error) {
+	offset, err := w.file.Seek(0, 0)
+	if err != nil {
+		return 0, err
+	}
+	return w.file.WriteAt(p, offset)
+}
+
 func main() {
 	logfile, err := os.OpenFile(LOGFILE, os.O_CREATE|os.O_APPEND|os.O_RDWR, 0666)
 	if err != nil {
@@ -151,26 +328,7 @@ func main() {
 	os.Stderr = logfile
 
 	if command != "" {
-		conn, err := net.Dial("unix", SOCK)
-		if err != nil {
-			log.Fatalln("Couldn't dial:", err)
-		}
-		_, err = conn.Write([]byte(command))
-		if err != nil {
-			log.Fatalln("Couldn't send command")
-		}
-		fmt.Println("Sent.")
-		if command == "list" {
-			buf := make([]byte, 512)
-			nr, err := conn.Read(buf)
-			if err != nil {
-				log.Fatalln("Couldn't read response.")
-			}
-			response := string(buf[0:nr])
-			fmt.Println("Response:")
-			fmt.Printf(response)
-		}
-		os.Exit(0)
+		execCommand(command)
 	}
 	// fmt.Println("New array", players)
 	// Start command listener
@@ -194,33 +352,11 @@ func main() {
 			}
 		} else if conn, err := net.Dial("unix", SOCK); err == nil {
 			// When waybar-mpris is already running, we attach to its output instead of launching a whole new instance.
-			// Print to stderr to avoid errors from waybar
-			os.Stderr.WriteString("waybar-mpris is already running. This instance will clone its output.")
-			if err != nil {
-				log.Fatalln("Couldn't dial:", err)
-			}
-			_, err = conn.Write([]byte("share"))
-			if err != nil {
-				log.Fatalln("Couldn't send command")
-			}
-			buf := make([]byte, 512)
-			nr, err := conn.Read(buf)
-			if err != nil {
-				log.Fatalln("Couldn't read response.")
-			}
-			if string(buf[0:nr]) == "success" {
-				t, err := tail.TailFile(OUTFILE, tail.Config{
-					Follow:    true,
-					MustExist: true,
-					Logger:    tail.DiscardingLogger,
-				})
-				if err == nil {
-					for line := range t.Lines {
-						fmt.Println(line.Text)
-					}
-				}
-			}
+			duplicateOutput(conn)
 		} else {
+			if err != nil {
+				os.Stdout.WriteString("Couldn't dial socket, deleting instead: " + err.Error())
+			}
 			os.Remove(SOCK)
 			os.Remove(OUTFILE)
 		}
@@ -235,77 +371,7 @@ func main() {
 	players.mpris2.Reload()
 	players.mpris2.Sort()
 	lastLine := ""
-	go func() {
-		listener, err := net.Listen("unix", SOCK)
-		c := make(chan os.Signal, 1)
-		signal.Notify(c, os.Interrupt)
-		go func() {
-			<-c
-			os.Remove(OUTFILE)
-			os.Remove(SOCK)
-			os.Exit(1)
-		}()
-		if err != nil {
-			log.Fatalf("Couldn't establish socket connection at %s (error %s)\n", SOCK, err)
-		}
-		defer func() {
-			listener.Close()
-			os.Remove(SOCK)
-		}()
-		for {
-			con, err := listener.Accept()
-			if err != nil {
-				log.Println("Couldn't accept:", err)
-				continue
-			}
-			buf := make([]byte, 512)
-			nr, err := con.Read(buf)
-			if err != nil {
-				log.Println("Couldn't read:", err)
-				continue
-			}
-			command := string(buf[0:nr])
-			switch command {
-			case "player-next":
-				length := len(players.mpris2.List)
-				if length != 1 {
-					if players.mpris2.Current < uint(length-1) {
-						players.mpris2.Current++
-					} else {
-						players.mpris2.Current = 0
-					}
-					players.mpris2.Refresh()
-				}
-			case "player-prev":
-				length := len(players.mpris2.List)
-				if length != 1 {
-					if players.mpris2.Current != 0 {
-						players.mpris2.Current--
-					} else {
-						players.mpris2.Current = uint(length - 1)
-					}
-					players.mpris2.Refresh()
-				}
-			case "next":
-				players.Next()
-			case "prev":
-				players.Prev()
-			case "toggle":
-				players.Toggle()
-			case "list":
-				con.Write([]byte(players.mpris2.String()))
-			case "share":
-				out, err := os.Create(OUTFILE)
-				if err != nil {
-					con.Write([]byte(fmt.Sprintf("Failed: %s", err)))
-				}
-				WRITER = io.MultiWriter(os.Stdout, out)
-				con.Write([]byte("success"))
-			default:
-				fmt.Println("Invalid command")
-			}
-		}
-	}()
+	go listenForCommands(players)
 	go players.mpris2.Listen()
 	if SHOW_POS {
 		go func() {
