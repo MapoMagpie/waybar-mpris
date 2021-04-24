@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -43,12 +42,13 @@ var (
 
 // JSON returns json for waybar to consume.
 func playerJSON(p *mpris2.Player) string {
-	data := map[string]string{}
 	symbol := PLAY
-	data["class"] = "paused"
+	out := "{\"class\": \""
 	if p.Playing {
 		symbol = PAUSE
-		data["class"] = "playing"
+		out += "playing"
+	} else {
+		out += "paused"
 	}
 	var pos string
 	if SHOW_POS {
@@ -96,21 +96,23 @@ func playerJSON(p *mpris2.Player) string {
 		}
 		text += v + right
 	}
-
-	data["tooltip"] = fmt.Sprintf(
-		"%s\nby %s\n",
+	out += "\",\"text\":\"" + text + "\","
+	out += "\"tooltip\":\"" + fmt.Sprintf(
+		"%s\\nby %s\\n",
 		strings.ReplaceAll(p.Title, "&", "&amp;"),
-		strings.ReplaceAll(p.Artist, "&", "&amp;"))
+		strings.ReplaceAll(p.Artist, "&", "&amp;"),
+	)
 	if p.Album != "" {
-		data["tooltip"] += "from " + strings.ReplaceAll(p.Album, "&", "&amp;") + "\n"
+		out += "from " + strings.ReplaceAll(p.Album, "&", "&amp;") + "\\n"
 	}
-	data["tooltip"] += "(" + p.Name + ")"
-	data["text"] = text
-	out, err := json.Marshal(data)
-	if err != nil {
-		return "{}"
-	}
-	return string(out)
+	out += "(" + p.Name + ")\"}"
+	return out
+	// return fmt.Sprintf("{\"class\":\"%s\",\"text\":\"%s\",\"tooltip\":\"%s\"}", data["class"], data["text"], data["tooltip"])
+	// out, err := json.Marshal(data)
+	// if err != nil {
+	// 	return "{}"
+	// }
+	// return string(out)
 }
 
 type players struct {
@@ -204,10 +206,11 @@ func duplicateOutput(conn net.Conn) {
 						return
 					}
 					str := string(l)
+					// Trim extra newline is necessary
 					if str[len(str)-2:] == "\n\n" {
 						fmt.Print(str[:len(str)-1])
 					} else {
-						fmt.Print(string(l))
+						fmt.Print(str)
 					}
 					f.Seek(0, 0)
 				}
