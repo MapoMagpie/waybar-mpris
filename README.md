@@ -4,6 +4,9 @@
     <img src="images/cropped.gif" style="width: 100%;" alt="bar gif"></img>
 </p>
 
+##### Downloads:
+##### [binary](https://builds2.hrfee.pw/view/hrfee/waybar-mpris) | [aur](https://aur.archlinux.org/packages/waybar-mpris-git/)
+
 a waybar component/utility for displaying and controlling MPRIS2 compliant media players individually, inspired by [waybar-media](https://github.com/yurihs/waybar-media). 
 
 MPRIS2 is widely supported, so this component should work with:

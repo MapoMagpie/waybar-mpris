@@ -79,6 +79,10 @@ func playerJSON(p *mpris2.Player) string {
 			if pos != "" && SHOW_POS {
 				items = append(items, pos)
 			}
+		case "PLAYER":
+			if p.Name != "" {
+				items = append(items, p.Name)
+			}
 		}
 	}
 	if len(items) == 0 {
@@ -318,7 +322,7 @@ func main() {
 	flag.StringVar(&PLAY, "play", PLAY, "Play symbol/text to use.")
 	flag.StringVar(&PAUSE, "pause", PAUSE, "Pause symbol/text to use.")
 	flag.StringVar(&SEP, "separator", SEP, "Separator string to use between artist, album, and title.")
-	flag.StringVar(&ORDER, "order", ORDER, "Element order.")
+	flag.StringVar(&ORDER, "order", ORDER, "Element order. An extra \"PLAYER\" element is also available.")
 	flag.BoolVar(&AUTOFOCUS, "autofocus", AUTOFOCUS, "Auto switch to currently playing music players.")
 	flag.BoolVar(&SHOW_POS, "position", SHOW_POS, "Show current position between brackets, e.g (04:50/05:00)")
 	flag.BoolVar(&INTERPOLATE, "interpolate", INTERPOLATE, "Interpolate track position (helpful for players that don't update regularly, e.g mpDris2)")
