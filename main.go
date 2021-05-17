@@ -40,6 +40,41 @@ var (
 	WRITER      io.Writer = os.Stdout
 )
 
+const (
+	cPlayerNext     = "pn"
+	cPlayerPrev     = "pp"
+	cNext           = "mn"
+	cPrev           = "mp"
+	cToggle         = "mt"
+	cList           = "ls"
+	cShare          = "sh"
+	cPreShare       = "ps"
+	rSuccess        = "sc"
+	rInvalidCommand = "iv"
+)
+
+func stringToCmd(str string) string {
+	switch str {
+	case "player-next":
+		return cPlayerNext
+	case "player-prev":
+		return cPlayerPrev
+	case "next":
+		return cNext
+	case "prev":
+		return cPrev
+	case "toggle":
+		return cToggle
+	case "list":
+		return cList
+	case "share":
+		return cShare
+	case "pre-share":
+		return cPreShare
+	}
+	return ""
+}
+
 // JSON returns json for waybar to consume.
 func playerJSON(p *mpris2.Player) string {
 	symbol := PLAY
@@ -140,7 +175,8 @@ func execCommand(cmd string) {
 	if err != nil {
 		log.Fatalln("Couldn't dial:", err)
 	}
-	_, err = conn.Write([]byte(cmd))
+	shortCmd := stringToCmd(cmd)
+	_, err = conn.Write([]byte(shortCmd))
 	if err != nil {
 		log.Fatalln("Couldn't send command")
 	}
@@ -158,69 +194,96 @@ func execCommand(cmd string) {
 	os.Exit(0)
 }
 
-func duplicateOutput(conn net.Conn) {
+func duplicateOutput() error {
 	// Print to stderr to avoid errors from waybar
 	os.Stderr.WriteString("waybar-mpris is already running. This instance will clone its output.")
-	// Tell other instance to share output in OUTFILE
-	_, err := conn.Write([]byte("share"))
+
+	conn, err := net.Dial("unix", SOCK)
+	if err != nil {
+		return err
+	}
+	_, err = conn.Write([]byte(cPreShare))
 	if err != nil {
 		log.Fatalf("Couldn't send command: %v", err)
+		return err
 	}
 	buf := make([]byte, 512)
 	nr, err := conn.Read(buf)
 	if err != nil {
 		log.Fatalf("Couldn't read response: %v", err)
+		return err
 	}
-	if resp := string(buf[0:nr]); resp == "success" {
-		// t, err := tail.TailFile(OUTFILE, tail.Config{
-		// 	Follow:    true,
-		// 	MustExist: true,
-		// 	Logger:    tail.DiscardingLogger,
-		// })
-		// if err == nil {
-		// 	for line := range t.Lines {
-		// 		fmt.Println(line.Text)
-		// 	}
-		// }
-		f, err := os.Open(OUTFILE)
+	argString := ""
+	for _, arg := range os.Args {
+		argString += arg + "|"
+	}
+	if string(buf[0:nr]) == argString {
+		conn.Close()
+		conn, err = net.Dial("unix", SOCK)
 		if err != nil {
-			log.Fatalf("Failed to open \"%s\": %v", OUTFILE, err)
+			return err
 		}
-		watcher, err := fsnotify.NewWatcher()
+		// Tell other instance to share output in OUTFILE
+		_, err := conn.Write([]byte(cShare))
 		if err != nil {
-			log.Fatalf("Failed to start watcher: %v", err)
+			log.Fatalf("Couldn't send command: %v", err)
 		}
-		defer watcher.Close()
-		err = watcher.Add(OUTFILE)
+		buf := make([]byte, 2)
+		nr, err := conn.Read(buf)
 		if err != nil {
-			log.Fatalf("Failed to watch file: %v", err)
+			log.Fatalf("Couldn't read response: %v", err)
 		}
-		for {
-			select {
-			case event, ok := <-watcher.Events:
-				if !ok {
-					log.Printf("Watcher failed: %v", err)
-					return
-				}
-				if event.Op&fsnotify.Write == fsnotify.Write {
-					l, err := io.ReadAll(f)
-					if err != nil {
-						log.Printf("Failed to read file: %v", err)
-						return
+		if resp := string(buf[0:nr]); resp == rSuccess {
+			// t, err := tail.TailFile(OUTFILE, tail.Config{
+			// 	Follow:    true,
+			// 	MustExist: true,
+			// 	Logger:    tail.DiscardingLogger,
+			// })
+			// if err == nil {
+			// 	for line := range t.Lines {
+			// 		fmt.Println(line.Text)
+			// 	}
+			// }
+			f, err := os.Open(OUTFILE)
+			if err != nil {
+				log.Fatalf("Failed to open \"%s\": %v", OUTFILE, err)
+			}
+			watcher, err := fsnotify.NewWatcher()
+			if err != nil {
+				log.Fatalf("Failed to start watcher: %v", err)
+			}
+			defer watcher.Close()
+			err = watcher.Add(OUTFILE)
+			if err != nil {
+				log.Fatalf("Failed to watch file: %v", err)
+			}
+			for {
+				select {
+				case event, ok := <-watcher.Events:
+					if !ok {
+						log.Printf("Watcher failed: %v", err)
+						return err
 					}
-					str := string(l)
-					// Trim extra newline is necessary
-					if str[len(str)-2:] == "\n\n" {
-						fmt.Print(str[:len(str)-1])
-					} else {
-						fmt.Print(str)
+					if event.Op&fsnotify.Write == fsnotify.Write {
+						l, err := io.ReadAll(f)
+						if err != nil {
+							log.Printf("Failed to read file: %v", err)
+							return err
+						}
+						str := string(l)
+						// Trim extra newline is necessary
+						if str[len(str)-2:] == "\n\n" {
+							fmt.Print(str[:len(str)-1])
+						} else {
+							fmt.Print(str)
+						}
+						f.Seek(0, 0)
 					}
-					f.Seek(0, 0)
 				}
 			}
 		}
 	}
-
+	return nil
 }
 
 func listenForCommands(players *players) {
@@ -246,7 +309,7 @@ func listenForCommands(players *players) {
 			log.Println("Couldn't accept:", err)
 			continue
 		}
-		buf := make([]byte, 512)
+		buf := make([]byte, 2)
 		nr, err := con.Read(buf)
 		if err != nil {
 			log.Println("Couldn't read:", err)
@@ -254,7 +317,7 @@ func listenForCommands(players *players) {
 		}
 		command := string(buf[0:nr])
 		switch command {
-		case "player-next":
+		case cPlayerNext:
 			length := len(players.mpris2.List)
 			if length != 1 {
 				if players.mpris2.Current < uint(length-1) {
@@ -264,7 +327,7 @@ func listenForCommands(players *players) {
 				}
 				players.mpris2.Refresh()
 			}
-		case "player-prev":
+		case cPlayerPrev:
 			length := len(players.mpris2.List)
 			if length != 1 {
 				if players.mpris2.Current != 0 {
@@ -274,15 +337,15 @@ func listenForCommands(players *players) {
 				}
 				players.mpris2.Refresh()
 			}
-		case "next":
+		case cNext:
 			players.Next()
-		case "prev":
+		case cPrev:
 			players.Prev()
-		case "toggle":
+		case cToggle:
 			players.Toggle()
-		case "list":
+		case cList:
 			con.Write([]byte(players.mpris2.String()))
-		case "share":
+		case cShare:
 			if !isSharing {
 				f, err := os.OpenFile(OUTFILE, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0666)
 				defer f.Close()
@@ -293,10 +356,20 @@ func listenForCommands(players *players) {
 				WRITER = io.MultiWriter(os.Stdout, out)
 				isSharing = true
 			}
-			fmt.Fprint(con, "success")
+			fmt.Fprint(con, rSuccess)
+		/* Prior to sharing, the first instance sends its os.Args.
+		If the second instances args are different, the first sends the raw data (artist, album, etc.)
+		If they are the same, the first instance just sends its output and the second prints it. */
+		case cPreShare:
+			out := ""
+			for _, arg := range os.Args {
+				out += arg + "|"
+			}
+			con.Write([]byte(out))
 		default:
 			fmt.Println("Invalid command")
 		}
+		con.Close()
 	}
 }
 
@@ -356,13 +429,9 @@ func main() {
 				ignoreChoice = true
 				// os.Remove(SOCK)
 			}
-		} else if conn, err := net.Dial("unix", SOCK); err == nil {
 			// When waybar-mpris is already running, we attach to its output instead of launching a whole new instance.
-			duplicateOutput(conn)
-		} else {
-			if err != nil {
-				os.Stdout.WriteString("Couldn't dial socket, deleting instead: " + err.Error())
-			}
+		} else if err := duplicateOutput(); err != nil {
+			os.Stdout.WriteString("Couldn't dial socket, deleting instead: " + err.Error())
 			os.Remove(SOCK)
 			os.Remove(OUTFILE)
 		}
