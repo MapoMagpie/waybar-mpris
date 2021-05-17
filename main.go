@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"time"
 
@@ -18,10 +19,11 @@ import (
 
 // Various paths and values to use elsewhere.
 const (
-	SOCK    = "/tmp/waybar-mpris.sock"
-	LOGFILE = "/tmp/waybar-mpris.log"
-	OUTFILE = "/tmp/waybar-mpris.out"
-	POLL    = 1
+	SOCK     = "/tmp/waybar-mpris.sock"
+	LOGFILE  = "/tmp/waybar-mpris.log"
+	OUTFILE  = "/tmp/waybar-mpris.out"      // Used for sharing waybar output when args are the same.
+	DATAFILE = "/tmp/waybar-mpris.data.out" // Used for sharing "\n"-separated player data between instances when args are different.
+	POLL     = 1
 )
 
 // Mostly default values for flag options.
@@ -32,12 +34,14 @@ var (
 	ORDER     = "SYMBOL:ARTIST:ALBUM:TITLE:POSITION"
 	AUTOFOCUS = false
 	// Available commands that can be sent to running instances.
-	COMMANDS              = []string{"player-next", "player-prev", "next", "prev", "toggle", "list"}
-	SHOW_POS              = false
-	INTERPOLATE           = false
-	REPLACE               = false
-	isSharing             = false
-	WRITER      io.Writer = os.Stdout
+	COMMANDS                          = []string{"player-next", "player-prev", "next", "prev", "toggle", "list"}
+	SHOW_POS                          = false
+	INTERPOLATE                       = false
+	REPLACE                           = false
+	isSharing                         = false
+	isDataSharing                     = false
+	WRITER                  io.Writer = os.Stdout
+	SHAREWRITER, DATAWRITER io.Writer
 )
 
 const (
@@ -49,8 +53,10 @@ const (
 	cList           = "ls"
 	cShare          = "sh"
 	cPreShare       = "ps"
+	cDataShare      = "ds"
 	rSuccess        = "sc"
 	rInvalidCommand = "iv"
+	rFailed         = "fa"
 )
 
 func stringToCmd(str string) string {
@@ -69,14 +75,81 @@ func stringToCmd(str string) string {
 		return cList
 	case "share":
 		return cShare
+	case "data-share":
+		return cDataShare
 	case "pre-share":
 		return cPreShare
 	}
 	return ""
 }
 
+// length-µS\nposition-µS\nplaying (0 or 1)\nartist\nalbum\ntitle\nplayer\n
+func fromData(p *player, cmd string) {
+	p.Duplicate = true
+	values := make([]string, 7)
+	prev := 0
+	current := 0
+	for i := range cmd {
+		if current == len(values) {
+			break
+		}
+		if cmd[i] == '\n' {
+			values[current] = cmd[prev:i]
+			prev = i + 1
+			current++
+		}
+	}
+	l, err := strconv.ParseInt(values[0], 10, 64)
+	if err != nil {
+		l = -1
+	}
+	p.Length = int(l) / 1000000
+	pos, err := strconv.ParseInt(values[1], 10, 64)
+	if err != nil {
+		pos = -1
+	}
+	p.Position = pos
+
+	if values[2] == "1" {
+		p.Playing = true
+	} else {
+		p.Playing = false
+	}
+	p.Artist = values[3]
+	p.Album = values[4]
+	p.Title = values[5]
+	p.Name = values[6]
+}
+
+func toData(p *player) (cmd string) {
+	cmd += strconv.FormatInt(int64(p.Length*1000000), 10) + "\n"
+	cmd += strconv.FormatInt(p.Position, 10) + "\n"
+	if p.Playing {
+		cmd += "1"
+	} else {
+		cmd += "0"
+	}
+	cmd += "\n"
+	cmd += p.Artist + "\n"
+	cmd += p.Album + "\n"
+	cmd += p.Title + "\n"
+	cmd += p.Name + "\n"
+	return
+}
+
+type player struct {
+	*mpris2.Player
+	Duplicate bool
+}
+
+func secondsToString(seconds int) string {
+	minutes := int(seconds / 60)
+	seconds -= int(minutes * 60)
+	return fmt.Sprintf("%02d:%02d", minutes, seconds)
+}
+
 // JSON returns json for waybar to consume.
-func playerJSON(p *mpris2.Player) string {
+func playerJSON(p *player) string {
 	symbol := PLAY
 	out := "{\"class\": \""
 	if p.Playing {
@@ -87,9 +160,14 @@ func playerJSON(p *mpris2.Player) string {
 	}
 	var pos string
 	if SHOW_POS {
-		pos = p.StringPosition()
-		if pos != "" {
-			pos = "(" + pos + ")"
+		if !p.Duplicate {
+			pos = p.StringPosition()
+			if pos != "" {
+				pos = "(" + pos + ")"
+			}
+		} else {
+			pos = "(" + secondsToString(int(p.Position/1000000)) + "/" + secondsToString(p.Length) + ")"
+
 		}
 	}
 	var items []string
@@ -159,7 +237,7 @@ type players struct {
 
 func (pl *players) JSON() string {
 	if len(pl.mpris2.List) != 0 {
-		return playerJSON(pl.mpris2.List[pl.mpris2.Current])
+		return playerJSON(&player{pl.mpris2.List[pl.mpris2.Current], false})
 	}
 	return "{}"
 }
@@ -217,18 +295,18 @@ func duplicateOutput() error {
 	for _, arg := range os.Args {
 		argString += arg + "|"
 	}
+	conn.Close()
+	conn, err = net.Dial("unix", SOCK)
+	if err != nil {
+		return err
+	}
 	if string(buf[0:nr]) == argString {
-		conn.Close()
-		conn, err = net.Dial("unix", SOCK)
-		if err != nil {
-			return err
-		}
 		// Tell other instance to share output in OUTFILE
 		_, err := conn.Write([]byte(cShare))
 		if err != nil {
 			log.Fatalf("Couldn't send command: %v", err)
 		}
-		buf := make([]byte, 2)
+		buf = make([]byte, 2)
 		nr, err := conn.Read(buf)
 		if err != nil {
 			log.Fatalf("Couldn't read response: %v", err)
@@ -277,6 +355,55 @@ func duplicateOutput() error {
 						} else {
 							fmt.Print(str)
 						}
+						f.Seek(0, 0)
+					}
+				}
+			}
+		}
+	} else {
+		_, err := conn.Write([]byte(cDataShare))
+		if err != nil {
+			log.Fatalf("Couldn't send command: %v", err)
+		}
+		buf = make([]byte, 2)
+		nr, err := conn.Read(buf)
+		if err != nil {
+			log.Fatalf("Couldn't read response: %v", err)
+		}
+		if resp := string(buf[0:nr]); resp == rSuccess {
+			f, err := os.Open(DATAFILE)
+			if err != nil {
+				log.Fatalf("Failed to open \"%s\": %v", DATAFILE, err)
+			}
+			watcher, err := fsnotify.NewWatcher()
+			if err != nil {
+				log.Fatalf("Failed to start watcher: %v", err)
+			}
+			defer watcher.Close()
+			err = watcher.Add(DATAFILE)
+			if err != nil {
+				log.Fatalf("Failed to watch file: %v", err)
+			}
+			p := &player{
+				&mpris2.Player{},
+				true,
+			}
+			for {
+				select {
+				case event, ok := <-watcher.Events:
+					if !ok {
+						log.Printf("Watcher failed: %v", err)
+						return err
+					}
+					if event.Op&fsnotify.Write == fsnotify.Write {
+						l, err := io.ReadAll(f)
+						if err != nil {
+							log.Printf("Failed to read file: %v", err)
+							return err
+						}
+						str := string(l)
+						fromData(p, str)
+						fmt.Fprintln(WRITER, playerJSON(p))
 						f.Seek(0, 0)
 					}
 				}
@@ -345,6 +472,25 @@ func listenForCommands(players *players) {
 			players.Toggle()
 		case cList:
 			con.Write([]byte(players.mpris2.String()))
+		case cDataShare:
+			if !isDataSharing {
+				f, err := os.OpenFile(DATAFILE, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0666)
+				defer f.Close()
+				if err != nil {
+					fmt.Fprintf(con, "Failed: %v", err)
+				}
+				DATAWRITER = dataWrite{
+					emptyEveryWrite{file: f},
+					players,
+				}
+				if isSharing {
+					WRITER = io.MultiWriter(SHAREWRITER, DATAWRITER, os.Stdout)
+				} else {
+					WRITER = io.MultiWriter(DATAWRITER, os.Stdout)
+				}
+				isDataSharing = true
+			}
+			fmt.Fprint(con, rSuccess)
 		case cShare:
 			if !isSharing {
 				f, err := os.OpenFile(OUTFILE, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0666)
@@ -352,8 +498,12 @@ func listenForCommands(players *players) {
 				if err != nil {
 					fmt.Fprintf(con, "Failed: %v", err)
 				}
-				var out io.Writer = emptyEveryWrite{file: f}
-				WRITER = io.MultiWriter(os.Stdout, out)
+				SHAREWRITER = emptyEveryWrite{file: f}
+				if isDataSharing {
+					WRITER = io.MultiWriter(SHAREWRITER, DATAWRITER, os.Stdout)
+				} else {
+					WRITER = io.MultiWriter(SHAREWRITER, os.Stdout)
+				}
 				isSharing = true
 			}
 			fmt.Fprint(con, rSuccess)
@@ -371,6 +521,16 @@ func listenForCommands(players *players) {
 		}
 		con.Close()
 	}
+}
+
+type dataWrite struct {
+	emptyEveryWrite
+	Players *players
+}
+
+func (w dataWrite) Write(p []byte) (n int, err error) {
+	line := toData(&player{w.Players.mpris2.List[w.Players.mpris2.Current], true})
+	return w.emptyEveryWrite.Write([]byte(line))
 }
 
 type emptyEveryWrite struct {
