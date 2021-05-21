@@ -484,9 +484,9 @@ func listenForCommands(players *players) {
 					players,
 				}
 				if isSharing {
-					WRITER = io.MultiWriter(SHAREWRITER, DATAWRITER, os.Stdout)
+					WRITER = io.MultiWriter(os.Stdout, SHAREWRITER, DATAWRITER)
 				} else {
-					WRITER = io.MultiWriter(DATAWRITER, os.Stdout)
+					WRITER = io.MultiWriter(os.Stdout, DATAWRITER)
 				}
 				isDataSharing = true
 			}
