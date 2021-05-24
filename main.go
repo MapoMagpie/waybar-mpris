@@ -530,7 +530,9 @@ type dataWrite struct {
 
 func (w dataWrite) Write(p []byte) (n int, err error) {
 	line := toData(&player{w.Players.mpris2.List[w.Players.mpris2.Current], true})
-	return w.emptyEveryWrite.Write([]byte(line))
+	_, err = w.emptyEveryWrite.Write([]byte(line))
+	n = len(p)
+	return
 }
 
 type emptyEveryWrite struct {
@@ -542,7 +544,9 @@ func (w emptyEveryWrite) Write(p []byte) (n int, err error) {
 	if err != nil {
 		return 0, err
 	}
-	return w.file.WriteAt(p, offset)
+	_, err = w.file.WriteAt(p, offset)
+	n = len(p)
+	return
 }
 
 func main() {
