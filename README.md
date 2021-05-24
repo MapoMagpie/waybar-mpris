@@ -22,6 +22,15 @@ MPRIS2 is widely supported, so this component should work with:
 ## Install
 Available on the AUR as [waybar-mpris-git](https://aur.archlinux.org/packages/waybar-mpris-git/) (Thanks @nichobi!)
 
+Available on my Debian repo as well:
+```sh
+sudo apt-get update && sudo apt-get install curl apt-transport-https gnupg
+curl https://apt.hrfee.dev/hrfee.pubkey.gpg | sudo apt-key add -
+echo "deb https://apt.hrfee.dev trusty-unstable main" | sudo tee /etc/apt/sources.list.d/hrfee.list
+sudo apt-get update
+sudo apt-get install waybar-mpris
+```
+
 `go get git.hrfee.pw/hrfee/waybar-mpris` will compile from source and install.
 
 You can also download a precompiled binary from [here](https://builds2.hrfee.pw/view/hrfee/waybar-mpris).
