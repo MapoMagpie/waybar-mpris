@@ -8,7 +8,8 @@ before:
   hooks:
     - go mod download
 builds:
-    - dir: ./
+    - id: main
+      dir: ./
       env:
         - CGO_ENABLED=0
       goos:
@@ -18,16 +19,37 @@ builds:
         - arm
         - arm64
 archives:
-  - replacements:
+  - id: main
+    builds:
+      - main
+    replacements:
         linux: Linux
         amd64: x86_64
 checksum:
     name_template: 'checksums.txt'
 snapshot:
-    name_template: "git-{{.ShortCommit}}"
+    name_template: "0.0.0-{{.ShortCommit}}"
 changelog:
     sort: asc
     filters:
         exclude:
             - '^docs:'
             - '^test:'
+nfpms:
+  - id: main
+    file_name_template: '{{ .ProjectName }}-git-{{ .ShortCommit }}_{{ .Arch }}'
+    package_name: waybar-mpris
+    homepage: https://git.hrfee.pw/hrfee/waybar-mpris
+    description: MPRIS2 waybar component
+    maintainer: Harvey Tindall <hrfee@hrfee.dev>
+    license: MIT
+    vendor: hrfee.dev
+    version_metadata: git
+    builds:
+      - main
+    content:
+      - src: ./LICENSE
+        dst: /usr/share/licenses/waybar-mpris
+    formats:
+      - deb
+      - rpm

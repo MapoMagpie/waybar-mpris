@@ -5,6 +5,9 @@ type: docker
 steps:
     - name: build
       image: golang:latest
+      volumes:
+        - name: ssh_key
+          path: /id_rsa
       commands:
         - apt update -y
         - apt install -y python3-pip curl
@@ -14,11 +17,17 @@ steps:
         - ./goreleaser.sh --snapshot --skip-publish --rm-dist
         - wget https://builds.hrfee.pw/upload.py
         - pip3 install requests
-        - bash -c 'python3 upload.py https://builds2.hrfee.pw hrfee waybar-mpris --upload ./dist/*.tar.gz'
+        - bash -c 'sftp -P 2022 -i /id_rsa -o StrictHostKeyChecking=no root@161.97.102.153:/repo/incoming <<< $"put dist/*.deb"'
+        - bash -c 'ssh -i /id_rsa root@161.97.102.153 -p 2022 "repo-process-deb trusty-unstable"'
+        - bash -c 'python3 upload.py https://builds2.hrfee.pw hrfee waybar-mpris --upload ./dist/*.tar.gz ./dist/*.rpm'
       environment:
           BUILDRONE_KEY:
               from_secret: BUILDRONE_KEY
 
+volumes:
+    - name: ssh_key
+      host:
+          path: /root/.ssh/id_rsa_packaging
 trigger:
     branch:
         - main
