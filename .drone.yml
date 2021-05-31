@@ -14,7 +14,7 @@ steps:
         - go mod download
         - curl -sL https://git.io/goreleaser > goreleaser.sh
         - chmod +x goreleaser.sh
-        - ./goreleaser.sh --snapshot --skip-publish --rm-dist
+        - ./version.sh ./goreleaser.sh --snapshot --skip-publish --rm-dist
         - wget https://builds.hrfee.pw/upload.py
         - pip3 install requests
         - bash -c 'sftp -P 2022 -i /id_rsa -o StrictHostKeyChecking=no root@161.97.102.153:/repo/incoming <<< $"put dist/*.deb"'

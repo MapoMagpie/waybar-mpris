@@ -1,3 +1,0 @@
-57ca953082ee67820539a128d6c285b1bc1e4e917e1376c86cbbc2436880330a  waybar-mpris_git-750317a_Linux_x86_64.tar.gz
-6e638c4c4e7b1aa324abbbbedda193600390988001c9d4c8d5ed4700f1f6ca0a  waybar-mpris_git-750317a_Linux_armv6.tar.gz
-c710c2cd4e4a3ed3c4d5e2b8f2a86077904c26365102496ea9b429e5ad2204a6  waybar-mpris_git-750317a_Linux_arm64.tar.gz
