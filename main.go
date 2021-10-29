@@ -540,12 +540,17 @@ type emptyEveryWrite struct {
 }
 
 func (w emptyEveryWrite) Write(p []byte) (n int, err error) {
+	n = len(p)
+	// Set new size in case previous data was longer and would leave garbage at the end of the file.
+	err = w.file.Truncate(int64(n))
+	if err != nil {
+		return 0, err
+	}
 	offset, err := w.file.Seek(0, 0)
 	if err != nil {
 		return 0, err
 	}
 	_, err = w.file.WriteAt(p, offset)
-	n = len(p)
 	return
 }
 
