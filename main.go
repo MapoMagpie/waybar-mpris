@@ -600,7 +600,7 @@ func main() {
 			}
 			// When waybar-mpris is already running, we attach to its output instead of launching a whole new instance.
 		} else if err := duplicateOutput(); err != nil {
-			os.Stdout.WriteString("Couldn't dial socket, deleting instead: " + err.Error())
+			os.Stderr.WriteString("Couldn't dial socket, deleting instead: " + err.Error())
 			os.Remove(SOCK)
 			os.Remove(OUTFILE)
 		}
