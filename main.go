@@ -150,6 +150,10 @@ func secondsToString(seconds int) string {
 
 // JSON returns json for waybar to consume.
 func playerJSON(p *player) string {
+	artist := strings.ReplaceAll(p.Artist, "\"", "\\\"")
+	album := strings.ReplaceAll(p.Album, "\"", "\\\"")
+	title := strings.ReplaceAll(p.Title, "\"", "\\\"")
+	name := strings.ReplaceAll(p.Name, "\"", "\\\"")
 	symbol := PLAY
 	out := "{\"class\": \""
 	if p.Playing {
@@ -177,24 +181,24 @@ func playerJSON(p *player) string {
 		case "SYMBOL":
 			items = append(items, symbol)
 		case "ARTIST":
-			if p.Artist != "" {
-				items = append(items, p.Artist)
+			if artist != "" {
+				items = append(items, artist)
 			}
 		case "ALBUM":
-			if p.Album != "" {
-				items = append(items, p.Album)
+			if album != "" {
+				items = append(items, album)
 			}
 		case "TITLE":
-			if p.Title != "" {
-				items = append(items, p.Title)
+			if title != "" {
+				items = append(items, title)
 			}
 		case "POSITION":
 			if pos != "" && SHOW_POS {
 				items = append(items, pos)
 			}
 		case "PLAYER":
-			if p.Name != "" {
-				items = append(items, p.Name)
+			if name != "" {
+				items = append(items, name)
 			}
 		}
 	}
@@ -214,14 +218,14 @@ func playerJSON(p *player) string {
 		text += v + right
 	}
 	out += "\",\"text\":\"" + text + "\","
-	out += "\"tooltip\":\"" + strings.ReplaceAll(p.Title, "&", "&amp;") + "\\n"
-	if p.Artist != "" {
-		out += "by " + strings.ReplaceAll(p.Artist, "&", "&amp;") + "\\n"
+	out += "\"tooltip\":\"" + strings.ReplaceAll(title, "&", "&amp;") + "\\n"
+	if artist != "" {
+		out += "by " + strings.ReplaceAll(artist, "&", "&amp;") + "\\n"
 	}
-	if p.Album != "" {
-		out += "from " + strings.ReplaceAll(p.Album, "&", "&amp;") + "\\n"
+	if album != "" {
+		out += "from " + strings.ReplaceAll(album, "&", "&amp;") + "\\n"
 	}
-	out += "(" + p.Name + ")\"}"
+	out += "(" + name + ")\"}"
 	return out
 	// return fmt.Sprintf("{\"class\":\"%s\",\"text\":\"%s\",\"tooltip\":\"%s\"}", data["class"], data["text"], data["tooltip"])
 	// out, err := json.Marshal(data)
