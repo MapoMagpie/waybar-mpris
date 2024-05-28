@@ -38,6 +38,7 @@ var (
 	SHOW_POS                          = false
 	INTERPOLATE                       = false
 	REPLACE                           = false
+	WIDTH                   int32     = 0
 	isSharing                         = false
 	isDataSharing                     = false
 	WRITER                  io.Writer = os.Stdout
@@ -148,29 +149,26 @@ func secondsToString(seconds int) string {
 	return fmt.Sprintf("%02d:%02d", minutes, seconds)
 }
 
+const TAMPLATE = `{"class": "$classStr", "text": "$textStr", "tooltip": "$tooltipStr"}`
+
 // JSON returns json for waybar to consume.
 func playerJSON(p *player) string {
 	artist := strings.ReplaceAll(p.Artist, "\"", "\\\"")
 	album := strings.ReplaceAll(p.Album, "\"", "\\\"")
 	title := strings.ReplaceAll(p.Title, "\"", "\\\"")
 	name := strings.ReplaceAll(p.Name, "\"", "\\\"")
-	symbol := PLAY
-	out := "{\"class\": \""
+	symbol := PAUSE
+	class := "paused"
 	if p.Playing {
 		symbol = PAUSE
-		out += "playing"
-	} else {
-		out += "paused"
+		class += "playing"
 	}
-	var pos string
+	var duration string
 	if SHOW_POS {
 		if !p.Duplicate {
-			pos = p.StringPosition()
-			if pos != "" {
-				pos = "(" + pos + ")"
-			}
+			duration = p.StringPosition()
 		} else {
-			pos = "(" + secondsToString(int(p.Position/1000000)) + "/" + secondsToString(p.Length) + ")"
+			duration = secondsToString(int(p.Position/1000000)) + "/" + secondsToString(p.Length)
 		}
 	}
 	var items []string
@@ -192,8 +190,8 @@ func playerJSON(p *player) string {
 				items = append(items, title)
 			}
 		case "POSITION":
-			if pos != "" && SHOW_POS {
-				items = append(items, pos)
+			if SHOW_POS && duration != "" {
+				items = append(items, duration)
 			}
 		case "PLAYER":
 			if name != "" {
@@ -207,31 +205,26 @@ func playerJSON(p *player) string {
 	text := ""
 	for i, v := range items {
 		right := ""
-		if (v == symbol || v == pos) && i != len(items)-1 {
+		if (v == symbol || v == duration) && i != len(items)-1 {
 			right = " "
-		} else if i != len(items)-1 && items[i+1] != symbol && items[i+1] != pos {
+		} else if i != len(items)-1 && items[i+1] != symbol && items[i+1] != duration {
 			right = SEP
 		} else {
 			right = " "
 		}
 		text += v + right
 	}
-	out += "\",\"text\":\"" + text + "\","
-	out += "\"tooltip\":\"" + strings.ReplaceAll(title, "&", "&amp;") + "\\n"
+	toolstip := title
 	if artist != "" {
-		out += "by " + strings.ReplaceAll(artist, "&", "&amp;") + "\\n"
+		toolstip += "\\nBY: " + artist
 	}
 	if album != "" {
-		out += "from " + strings.ReplaceAll(album, "&", "&amp;") + "\\n"
+		toolstip += "\\nFROM: " + album
 	}
-	out += "(" + name + ")\"}"
+	out := strings.Replace(TAMPLATE, "$classStr", class, 1)
+	out = strings.Replace(out, "$textStr", text, 1)
+	out = strings.Replace(out, "$tooltipStr", toolstip, 1)
 	return out
-	// return fmt.Sprintf("{\"class\":\"%s\",\"text\":\"%s\",\"tooltip\":\"%s\"}", data["class"], data["text"], data["tooltip"])
-	// out, err := json.Marshal(data)
-	// if err != nil {
-	// 	return "{}"
-	// }
-	// return string(out)
 }
 
 type Players struct {
@@ -572,6 +565,7 @@ func main() {
 	flag.BoolVar(&SHOW_POS, "position", SHOW_POS, "Show current position between brackets, e.g (04:50/05:00)")
 	flag.BoolVar(&INTERPOLATE, "interpolate", INTERPOLATE, "Interpolate track position (helpful for players that don't update regularly, e.g mpDris2)")
 	flag.BoolVar(&REPLACE, "replace", REPLACE, "replace existing waybar-mpris if found. When false, new instance will clone the original instances output.")
+	flag.Int32Var(&WIDTH, "width", WIDTH, "Width of the text in json, if not zero, its will")
 	var command string
 	flag.StringVar(&command, "send", "", "send command to already runnning waybar-mpris instance. (options: "+strings.Join(COMMANDS, "/")+")")
 
@@ -581,7 +575,6 @@ func main() {
 	if command != "" {
 		execCommand(command)
 	}
-	// fmt.Println("New array", players)
 	// Start command listener
 	if _, err := os.Stat(SOCK); err == nil {
 		if REPLACE {
@@ -616,7 +609,7 @@ func main() {
 	go players.mpris2.Listen()
 
 	timer := time.NewTicker(1 * time.Second)
-	players.mpris2.Refresh()
+	go players.mpris2.Refresh()
 	for {
 		outputLine := ""
 		select {
