@@ -41,7 +41,7 @@ var (
 	isSharing                         = false
 	isDataSharing                     = false
 	WRITER                  io.Writer = os.Stdout
-	SHAREWRITER, DATAWRITER io.Writer
+	SHAREWRITER, DATAWRITER io.WriteCloser
 )
 
 const (
@@ -171,7 +171,6 @@ func playerJSON(p *player) string {
 			}
 		} else {
 			pos = "(" + secondsToString(int(p.Position/1000000)) + "/" + secondsToString(p.Length) + ")"
-
 		}
 	}
 	var items []string
@@ -235,22 +234,22 @@ func playerJSON(p *player) string {
 	// return string(out)
 }
 
-type players struct {
+type Players struct {
 	mpris2 *mpris2.Mpris2
 }
 
-func (pl *players) JSON() string {
+func (pl *Players) JSON() string {
 	if len(pl.mpris2.List) != 0 {
 		return playerJSON(&player{pl.mpris2.List[pl.mpris2.Current], false})
 	}
 	return "{}"
 }
 
-func (pl *players) Next() { pl.mpris2.List[pl.mpris2.Current].Next() }
+func (pl *Players) Next() { pl.mpris2.List[pl.mpris2.Current].Next() }
 
-func (pl *players) Prev() { pl.mpris2.List[pl.mpris2.Current].Previous() }
+func (pl *Players) Prev() { pl.mpris2.List[pl.mpris2.Current].Previous() }
 
-func (pl *players) Toggle() { pl.mpris2.List[pl.mpris2.Current].Toggle() }
+func (pl *Players) Toggle() { pl.mpris2.List[pl.mpris2.Current].Toggle() }
 
 func execCommand(cmd string) {
 	conn, err := net.Dial("unix", SOCK)
@@ -271,7 +270,7 @@ func execCommand(cmd string) {
 		}
 		response := string(buf[0:nr])
 		fmt.Println("Response:")
-		fmt.Printf(response)
+		fmt.Print(response)
 	}
 	os.Exit(0)
 }
@@ -339,28 +338,21 @@ func duplicateOutput() error {
 			if err != nil {
 				log.Fatalf("Failed to watch file: %v", err)
 			}
-			for {
-				select {
-				case event, ok := <-watcher.Events:
-					if !ok {
-						log.Printf("Watcher failed: %v", err)
+			for event := range watcher.Events {
+				if event.Op&fsnotify.Write == fsnotify.Write {
+					l, err := io.ReadAll(f)
+					if err != nil {
+						log.Printf("Failed to read file: %v", err)
 						return err
 					}
-					if event.Op&fsnotify.Write == fsnotify.Write {
-						l, err := io.ReadAll(f)
-						if err != nil {
-							log.Printf("Failed to read file: %v", err)
-							return err
-						}
-						str := string(l)
-						// Trim extra newline is necessary
-						if str[len(str)-2:] == "\n\n" {
-							fmt.Print(str[:len(str)-1])
-						} else {
-							fmt.Print(str)
-						}
-						f.Seek(0, 0)
+					str := string(l)
+					// Trim extra newline is necessary
+					if str[len(str)-2:] == "\n\n" {
+						fmt.Print(str[:len(str)-1])
+					} else {
+						fmt.Print(str)
 					}
+					f.Seek(0, 0)
 				}
 			}
 		}
@@ -392,24 +384,17 @@ func duplicateOutput() error {
 				&mpris2.Player{},
 				true,
 			}
-			for {
-				select {
-				case event, ok := <-watcher.Events:
-					if !ok {
-						log.Printf("Watcher failed: %v", err)
+			for event := range watcher.Events {
+				if event.Op&fsnotify.Write == fsnotify.Write {
+					l, err := io.ReadAll(f)
+					if err != nil {
+						log.Printf("Failed to read file: %v", err)
 						return err
 					}
-					if event.Op&fsnotify.Write == fsnotify.Write {
-						l, err := io.ReadAll(f)
-						if err != nil {
-							log.Printf("Failed to read file: %v", err)
-							return err
-						}
-						str := string(l)
-						fromData(p, str)
-						fmt.Fprintln(WRITER, playerJSON(p))
-						f.Seek(0, 0)
-					}
+					str := string(l)
+					fromData(p, str)
+					fmt.Fprintln(WRITER, playerJSON(p))
+					f.Seek(0, 0)
 				}
 			}
 		}
@@ -417,7 +402,7 @@ func duplicateOutput() error {
 	return nil
 }
 
-func listenForCommands(players *players) {
+func listenForCommands(players *Players) {
 	listener, err := net.Listen("unix", SOCK)
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, os.Interrupt)
@@ -425,6 +410,12 @@ func listenForCommands(players *players) {
 		<-c
 		os.Remove(OUTFILE)
 		os.Remove(SOCK)
+		if DATAWRITER != nil {
+			DATAWRITER.Close()
+		}
+		if SHAREWRITER != nil {
+			SHAREWRITER.Close()
+		}
 		os.Exit(1)
 	}()
 	if err != nil {
@@ -478,14 +469,16 @@ func listenForCommands(players *players) {
 			con.Write([]byte(players.mpris2.String()))
 		case cDataShare:
 			if !isDataSharing {
-				f, err := os.OpenFile(DATAFILE, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0666)
-				defer f.Close()
-				if err != nil {
-					fmt.Fprintf(con, "Failed: %v", err)
-				}
-				DATAWRITER = dataWrite{
-					emptyEveryWrite{file: f},
-					players,
+				if DATAWRITER == nil {
+					f, err := os.OpenFile(DATAFILE, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0666)
+					if err != nil {
+						fmt.Fprintf(con, "Failed: %v", err)
+						os.Exit(1)
+					}
+					DATAWRITER = DataWriter{
+						EmptyEveryWriter{file: f},
+						players,
+					}
 				}
 				if isSharing {
 					WRITER = io.MultiWriter(os.Stdout, SHAREWRITER, DATAWRITER)
@@ -497,12 +490,14 @@ func listenForCommands(players *players) {
 			fmt.Fprint(con, rSuccess)
 		case cShare:
 			if !isSharing {
-				f, err := os.OpenFile(OUTFILE, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0666)
-				defer f.Close()
-				if err != nil {
-					fmt.Fprintf(con, "Failed: %v", err)
+				if SHAREWRITER == nil {
+					f, err := os.OpenFile(OUTFILE, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0666)
+					if err != nil {
+						fmt.Fprintf(con, "Failed: %v", err)
+						os.Exit(1)
+					}
+					SHAREWRITER = EmptyEveryWriter{file: f}
 				}
-				SHAREWRITER = emptyEveryWrite{file: f}
 				if isDataSharing {
 					WRITER = io.MultiWriter(SHAREWRITER, DATAWRITER, os.Stdout)
 				} else {
@@ -527,23 +522,23 @@ func listenForCommands(players *players) {
 	}
 }
 
-type dataWrite struct {
-	emptyEveryWrite
-	Players *players
+type DataWriter struct {
+	EmptyEveryWriter
+	Players *Players
 }
 
-func (w dataWrite) Write(p []byte) (n int, err error) {
+func (w DataWriter) Write(p []byte) (n int, err error) {
 	line := toData(&player{w.Players.mpris2.List[w.Players.mpris2.Current], true})
-	_, err = w.emptyEveryWrite.Write([]byte(line))
+	_, err = w.EmptyEveryWriter.Write([]byte(line))
 	n = len(p)
 	return
 }
 
-type emptyEveryWrite struct {
+type EmptyEveryWriter struct {
 	file *os.File
 }
 
-func (w emptyEveryWrite) Write(p []byte) (n int, err error) {
+func (w EmptyEveryWriter) Write(p []byte) (n int, err error) {
 	n = len(p)
 	// Set new size in case previous data was longer and would leave garbage at the end of the file.
 	err = w.file.Truncate(int64(n))
@@ -556,6 +551,10 @@ func (w emptyEveryWrite) Write(p []byte) (n int, err error) {
 	}
 	_, err = w.file.WriteAt(p, offset)
 	return
+}
+
+func (w EmptyEveryWriter) Close() error {
+	return w.file.Close()
 }
 
 func main() {
@@ -609,41 +608,44 @@ func main() {
 			os.Remove(OUTFILE)
 		}
 	}
+	players := NewPlayers()
+	players.mpris2.Reload()
+	players.mpris2.Sort()
+
+	go listenForCommands(players)
+	go players.mpris2.Listen()
+
+	timer := time.NewTicker(1 * time.Second)
+	players.mpris2.Refresh()
+	for {
+		outputLine := ""
+		select {
+		case <-timer.C:
+			if len(players.mpris2.List) != 0 {
+				if players.mpris2.List[players.mpris2.Current].Playing {
+					outputLine = players.JSON()
+				}
+			}
+		case v := <-players.mpris2.Messages:
+			if v.Name == "refresh" {
+				if AUTOFOCUS {
+					players.mpris2.Sort()
+				}
+				outputLine = players.JSON()
+			}
+		}
+		if outputLine != "" {
+			fmt.Fprintln(WRITER, outputLine)
+		}
+	}
+}
+
+func NewPlayers() *Players {
 	conn, err := dbus.SessionBus()
 	if err != nil {
 		log.Fatalln("Error connecting to DBus:", err)
 	}
-	players := &players{
+	return &Players{
 		mpris2: mpris2.NewMpris2(conn, INTERPOLATE, POLL, AUTOFOCUS),
 	}
-	players.mpris2.Reload()
-	players.mpris2.Sort()
-	lastLine := ""
-	go listenForCommands(players)
-	go players.mpris2.Listen()
-	if SHOW_POS {
-		go func() {
-			for {
-				time.Sleep(POLL * time.Second)
-				if len(players.mpris2.List) != 0 {
-					if players.mpris2.List[players.mpris2.Current].Playing {
-						go fmt.Fprintln(WRITER, players.JSON())
-					}
-				}
-			}
-		}()
-	}
-	fmt.Fprintln(WRITER, players.JSON())
-	for v := range players.mpris2.Messages {
-		if v.Name == "refresh" {
-			if AUTOFOCUS {
-				players.mpris2.Sort()
-			}
-			if l := players.JSON(); l != lastLine {
-				lastLine = l
-				fmt.Fprintln(WRITER, l)
-			}
-		}
-	}
-	players.mpris2.Refresh()
 }
