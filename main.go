@@ -43,6 +43,7 @@ var (
 	isDataSharing                     = false
 	WRITER                  io.Writer = os.Stdout
 	SHAREWRITER, DATAWRITER io.WriteCloser
+	TITLE_STEP              int = 0
 )
 
 const (
@@ -161,14 +162,14 @@ func playerJSON(p *player) string {
 	class := "paused"
 	if p.Playing {
 		symbol = PAUSE
-		class += "playing"
+		class = "playing"
 	}
-	var duration string
+	var position string
 	if SHOW_POS {
 		if !p.Duplicate {
-			duration = p.StringPosition()
+			position = p.StringPosition()
 		} else {
-			duration = secondsToString(int(p.Position/1000000)) + "/" + secondsToString(p.Length)
+			position = secondsToString(int(p.Position/1000000)) + "/" + secondsToString(p.Length)
 		}
 	}
 	var items []string
@@ -187,11 +188,13 @@ func playerJSON(p *player) string {
 			}
 		case "TITLE":
 			if title != "" {
-				items = append(items, title)
+				items = append(items, cutStringByWidthAndStep(title, int(WIDTH), TITLE_STEP))
+				TITLE_STEP++
 			}
 		case "POSITION":
-			if SHOW_POS && duration != "" {
-				items = append(items, duration)
+			if SHOW_POS && position != "" {
+				position = "[" + position + "]"
+				items = append(items, position)
 			}
 		case "PLAYER":
 			if name != "" {
@@ -205,12 +208,18 @@ func playerJSON(p *player) string {
 	text := ""
 	for i, v := range items {
 		right := ""
-		if (v == symbol || v == duration) && i != len(items)-1 {
-			right = " "
-		} else if i != len(items)-1 && items[i+1] != symbol && items[i+1] != duration {
-			right = SEP
+		if v == symbol || v == position {
+			if i != len(items)-1 {
+				right = " "
+			}
 		} else {
-			right = " "
+			if i == len(items)-1 {
+				right = ""
+			} else if items[i+1] == symbol || items[i+1] == position {
+				right = " "
+			} else {
+				right = SEP
+			}
 		}
 		text += v + right
 	}
@@ -308,16 +317,6 @@ func duplicateOutput() error {
 			log.Fatalf("Couldn't read response: %v", err)
 		}
 		if resp := string(buf[0:nr]); resp == rSuccess {
-			// t, err := tail.TailFile(OUTFILE, tail.Config{
-			// 	Follow:    true,
-			// 	MustExist: true,
-			// 	Logger:    tail.DiscardingLogger,
-			// })
-			// if err == nil {
-			// 	for line := range t.Lines {
-			// 		fmt.Println(line.Text)
-			// 	}
-			// }
 			f, err := os.Open(OUTFILE)
 			if err != nil {
 				log.Fatalf("Failed to open \"%s\": %v", OUTFILE, err)
@@ -607,9 +606,9 @@ func main() {
 
 	go listenForCommands(players)
 	go players.mpris2.Listen()
+	go players.mpris2.Refresh()
 
 	timer := time.NewTicker(1 * time.Second)
-	go players.mpris2.Refresh()
 	for {
 		outputLine := ""
 		select {
@@ -621,11 +620,18 @@ func main() {
 			}
 		case v := <-players.mpris2.Messages:
 			if v.Name == "refresh" {
+				TITLE_STEP = 0
 				if AUTOFOCUS {
 					players.mpris2.Sort()
 				}
+				if players.mpris2.List[players.mpris2.Current].Playing {
+					timer.Reset(200 * time.Millisecond)
+				} else {
+					timer.Reset(1 * time.Second)
+				}
 				outputLine = players.JSON()
 			}
+			fmt.Println("message: ", v)
 		}
 		if outputLine != "" {
 			fmt.Fprintln(WRITER, outputLine)
@@ -641,4 +647,32 @@ func NewPlayers() *Players {
 	return &Players{
 		mpris2: mpris2.NewMpris2(conn, INTERPOLATE, POLL, AUTOFOCUS),
 	}
+}
+
+func cutStringByWidthAndStep(str string, width int, step int) string {
+	runes := []rune(str)
+	gab := []rune(" > ")
+	le := len(runes)
+	if width == 0 {
+		return str
+	}
+	if le <= width {
+		return str
+	}
+	start := step % le
+	end := start + width
+	if end > le {
+		end = le
+	}
+	temp := runes[start:end]
+	tempLen := len(temp)
+	if tempLen < width {
+		if width-tempLen <= 3 {
+			temp = append(temp, gab[:width-tempLen]...)
+		} else {
+			temp = append(temp, gab...)
+			temp = append(temp, runes[:int(width)-tempLen-3]...)
+		}
+	}
+	return string(temp)
 }
