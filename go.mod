@@ -1,4 +1,4 @@
-module github.com/hrfee/waybar-mpris
+module github.com/MapoMagpie/waybar-mpris
 
 go 1.15
 
