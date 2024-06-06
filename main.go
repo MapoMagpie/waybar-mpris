@@ -44,6 +44,7 @@ var (
 	WRITER                  io.Writer = os.Stdout
 	SHAREWRITER, DATAWRITER io.WriteCloser
 	TITLE_STEP              int = 0
+	MANUAL_SWITCH               = false
 )
 
 const (
@@ -158,7 +159,7 @@ func playerJSON(p *player) string {
 	album := strings.ReplaceAll(p.Album, "\"", "\\\"")
 	title := strings.ReplaceAll(p.Title, "\"", "\\\"")
 	name := strings.ReplaceAll(p.Name, "\"", "\\\"")
-	symbol := PAUSE
+	symbol := PLAY
 	class := "paused"
 	if p.Playing {
 		symbol = PAUSE
@@ -439,6 +440,7 @@ func listenForCommands(players *Players) {
 				} else {
 					players.mpris2.Current = 0
 				}
+				MANUAL_SWITCH = true
 				players.mpris2.Refresh()
 			}
 		case cPlayerPrev:
@@ -449,6 +451,7 @@ func listenForCommands(players *Players) {
 				} else {
 					players.mpris2.Current = uint(length - 1)
 				}
+				MANUAL_SWITCH = true
 				players.mpris2.Refresh()
 			}
 		case cNext:
@@ -621,9 +624,10 @@ func main() {
 		case v := <-players.mpris2.Messages:
 			if v.Name == "refresh" {
 				TITLE_STEP = 0
-				if AUTOFOCUS {
+				if AUTOFOCUS && !MANUAL_SWITCH {
 					players.mpris2.Sort()
 				}
+				MANUAL_SWITCH = false
 				if players.mpris2.List[players.mpris2.Current].Playing {
 					timer.Reset(200 * time.Millisecond)
 				} else {
@@ -631,7 +635,6 @@ func main() {
 				}
 				outputLine = players.JSON()
 			}
-			fmt.Println("message: ", v)
 		}
 		if outputLine != "" {
 			fmt.Fprintln(WRITER, outputLine)
